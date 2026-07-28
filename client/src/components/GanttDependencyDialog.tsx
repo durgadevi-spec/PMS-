@@ -19,6 +19,10 @@ import {
     Trash2,
     Target,
     Calendar as CalendarIcon,
+    Layers,
+    Search,
+    X,
+    ChevronDown,
 } from "lucide-react";
 import { apiFetch, invalidateCache } from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
@@ -46,6 +50,11 @@ interface DependencyEdge {
     lagDays: number;
 }
 
+interface KeyStepOption {
+    id: string;
+    title: string;
+}
+
 interface GanttDependencyDialogProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
@@ -53,6 +62,7 @@ interface GanttDependencyDialogProps {
     projectTitle?: string;
     tasks: TaskItem[];
     employees?: any[];
+    keySteps?: KeyStepOption[];
     onDependencyChange?: () => void;
 }
 
@@ -134,6 +144,7 @@ export default function GanttDependencyDialog({
     projectTitle,
     tasks,
     employees = [],
+    keySteps = [],
     onDependencyChange,
 }: GanttDependencyDialogProps) {
     const { toast } = useToast();
@@ -141,6 +152,24 @@ export default function GanttDependencyDialog({
     const [dependencies, setDependencies] = useState<DependencyEdge[]>([]);
     const [loading, setLoading] = useState(false);
     const [hoveredDep, setHoveredDep] = useState<string | null>(null);
+
+    // Key Step filter state
+    const [selectedKsFilter, setSelectedKsFilter] = useState<string>("all");
+    const [ksDropdownOpen, setKsDropdownOpen] = useState(false);
+    const [ksSearch, setKsSearch] = useState("");
+    const ksDropdownRef = useRef<HTMLDivElement>(null);
+    const ksSearchInputRef = useRef<HTMLInputElement>(null);
+
+    // Close key step dropdown on outside click
+    useEffect(() => {
+        const handler = (e: MouseEvent) => {
+            if (ksDropdownRef.current && !ksDropdownRef.current.contains(e.target as Node)) {
+                setKsDropdownOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handler);
+        return () => document.removeEventListener("mousedown", handler);
+    }, []);
 
     // Drag state
     const [dragging, setDragging] = useState(false);
@@ -157,16 +186,35 @@ export default function GanttDependencyDialog({
     const ganttAreaRef = useRef<HTMLDivElement>(null);
     const ganttBodyRef = useRef<HTMLDivElement>(null);
 
-    // Filter tasks to those with valid dates
+    // Filter tasks to those with valid dates, then by selected Key Step
     const validTasks = useMemo(() => {
         return tasks
             .filter(t => t.startDate && t.endDate && toDateOnly(t.startDate) && toDateOnly(t.endDate))
+            .filter(t => {
+                if (selectedKsFilter === "all") return true;
+                if (selectedKsFilter === "none") return !t.keyStepId;
+                return String(t.keyStepId) === selectedKsFilter;
+            })
             .sort((a, b) => {
                 const da = toDateOnly(a.startDate)!.getTime();
                 const db = toDateOnly(b.startDate)!.getTime();
                 return da - db;
             });
-    }, [tasks]);
+    }, [tasks, selectedKsFilter]);
+
+    // Project-specific key steps (filter by tasks present in data)
+    const projectKeySteps = useMemo(() => {
+        const ksIdsInTasks = new Set(tasks.map(t => t.keyStepId).filter(Boolean));
+        return keySteps.filter(ks => ksIdsInTasks.has(ks.id));
+    }, [keySteps, tasks]);
+
+    const filteredKsOptions = projectKeySteps.filter(ks =>
+        ks.title.toLowerCase().includes(ksSearch.toLowerCase())
+    );
+
+    const activeKs = selectedKsFilter === "all" || selectedKsFilter === "none"
+        ? null
+        : projectKeySteps.find(ks => ks.id === selectedKsFilter);
 
     // Compute date bounds
     const { minDate, maxDate, totalDays } = useMemo(() => {
@@ -509,8 +557,9 @@ export default function GanttDependencyDialog({
                         </div>
                     ) : (
                         <div className="flex-1 overflow-hidden flex flex-col">
-                            {/* Legend */}
+                            {/* Legend + Key Step Filter bar */}
                             <div className="flex flex-wrap items-center gap-4 px-5 py-2 border-b border-muted/30 text-[10px] text-muted-foreground shrink-0 bg-muted/10">
+                                {/* Color legend items */}
                                 <span className="flex items-center gap-1.5">
                                     <span className="w-3 h-3 rounded-sm" style={{ background: "#3b82f6" }} /> In Progress
                                 </span>
@@ -534,6 +583,109 @@ export default function GanttDependencyDialog({
                                     <span className="w-3 h-3 rounded-full border-2 border-primary bg-background inline-block" />
                                     Drag handle
                                 </span>
+
+                                {/* Key Step filter — only shown when there are key steps */}
+                                {projectKeySteps.length > 0 && (
+                                    <div ref={ksDropdownRef} className="relative ml-auto flex items-center gap-2">
+                                        <Layers className="h-3 w-3 text-indigo-500 shrink-0" />
+                                        <span className="font-medium text-[10px] text-slate-500 whitespace-nowrap">Key Step:</span>
+                                        <div className="relative">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setKsDropdownOpen(o => !o);
+                                                    if (!ksDropdownOpen) setTimeout(() => ksSearchInputRef.current?.focus(), 50);
+                                                }}
+                                                className={cn(
+                                                    "flex items-center gap-1.5 h-6 px-2 rounded-md border text-[11px] bg-white transition-colors",
+                                                    "hover:border-indigo-400 hover:bg-indigo-50",
+                                                    ksDropdownOpen ? "border-indigo-400 bg-indigo-50 ring-1 ring-indigo-300" : "border-slate-200",
+                                                    selectedKsFilter !== "all" && "border-indigo-400 bg-indigo-50 text-indigo-700 font-medium"
+                                                )}
+                                            >
+                                                <span className="max-w-[160px] truncate">
+                                                    {selectedKsFilter === "all"
+                                                        ? "All Key Steps"
+                                                        : selectedKsFilter === "none"
+                                                        ? "No Key Step"
+                                                        : (activeKs?.title ?? "Key Step")}
+                                                </span>
+                                                {selectedKsFilter !== "all" && (
+                                                    <X
+                                                        className="h-2.5 w-2.5 text-indigo-400 hover:text-indigo-700 cursor-pointer shrink-0"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setSelectedKsFilter("all");
+                                                            setKsDropdownOpen(false);
+                                                        }}
+                                                    />
+                                                )}
+                                                <ChevronDown className={cn("h-2.5 w-2.5 text-slate-400 shrink-0 transition-transform", ksDropdownOpen && "rotate-180")} />
+                                            </button>
+
+                                            {ksDropdownOpen && (
+                                                <div className="absolute right-0 top-full mt-1 z-[9999] bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden" style={{ minWidth: 220 }}>
+                                                    {/* Search */}
+                                                    <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-slate-100">
+                                                        <Search className="h-3 w-3 text-slate-400 shrink-0" />
+                                                        <input
+                                                            ref={ksSearchInputRef}
+                                                            type="text"
+                                                            value={ksSearch}
+                                                            onChange={e => setKsSearch(e.target.value)}
+                                                            placeholder="Search key steps..."
+                                                            className="flex-1 text-[11px] bg-transparent outline-none placeholder:text-slate-400"
+                                                        />
+                                                        {ksSearch && (
+                                                            <X
+                                                                className="h-2.5 w-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                                                                onClick={() => setKsSearch("")}
+                                                            />
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-52 overflow-y-auto py-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => { setSelectedKsFilter("all"); setKsDropdownOpen(false); setKsSearch(""); }}
+                                                            className={cn("w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 transition-colors flex items-center gap-2", selectedKsFilter === "all" && "bg-indigo-50 text-indigo-700 font-semibold")}
+                                                        >
+                                                            <Layers className="h-3 w-3 opacity-50" /> All Key Steps
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => { setSelectedKsFilter("none"); setKsDropdownOpen(false); setKsSearch(""); }}
+                                                            className={cn("w-full text-left px-3 py-1.5 text-[11px] italic text-slate-500 hover:bg-slate-50 transition-colors", selectedKsFilter === "none" && "bg-indigo-50 text-indigo-700 font-semibold not-italic")}
+                                                        >
+                                                            No Key Step
+                                                        </button>
+                                                        {filteredKsOptions.length === 0 && ksSearch && (
+                                                            <p className="px-3 py-2 text-[11px] text-muted-foreground">No matches for "{ksSearch}"</p>
+                                                        )}
+                                                        {filteredKsOptions.map(ks => (
+                                                            <button
+                                                                key={ks.id}
+                                                                type="button"
+                                                                onClick={() => { setSelectedKsFilter(ks.id); setKsDropdownOpen(false); setKsSearch(""); }}
+                                                                className={cn(
+                                                                    "w-full text-left px-3 py-1.5 text-[11px] hover:bg-indigo-50 hover:text-indigo-700 transition-colors truncate",
+                                                                    selectedKsFilter === ks.id && "bg-indigo-50 text-indigo-700 font-semibold"
+                                                                )}
+                                                            >
+                                                                {ks.title}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    {/* Footer */}
+                                                    <div className="px-3 py-1.5 border-t border-slate-100 bg-slate-50">
+                                                        <span className="text-[10px] text-muted-foreground">
+                                                            {validTasks.length} task{validTasks.length !== 1 ? "s" : ""} shown
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             {/* Gantt area */}

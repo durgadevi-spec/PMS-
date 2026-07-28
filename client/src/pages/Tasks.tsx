@@ -7226,6 +7226,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
         }
         tasks={tasks}
         employees={allEmployees}
+        keySteps={keySteps}
         onDependencyChange={refreshTasks}
       />
       {ReasonDialog}
