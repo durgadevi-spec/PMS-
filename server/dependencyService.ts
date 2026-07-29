@@ -312,7 +312,12 @@ export async function applyScheduleChange(
 
     const oldStart = task.startDate as string | null;
     const oldEnd = task.endDate as string | null;
-    const oldDuration = task.durationDays ?? (oldStart && oldEnd ? durationFromDates(oldStart, oldEnd) : null);
+    // Prefer duration derived from the task's actual start/end dates (source
+    // of truth) over the stored durationDays column, which isn't guaranteed
+    // to be kept in sync by every task-update code path. Using a stale
+    // durationDays here was causing dependency cascades to shift the start
+    // date but recompute the wrong (often unchanged) end date.
+    const oldDuration = oldStart && oldEnd ? durationFromDates(oldStart, oldEnd) : (task.durationDays ?? null);
 
     let newStart = changes.startDate ?? oldStart ?? undefined;
     let newEnd = changes.endDate ?? oldEnd ?? undefined;

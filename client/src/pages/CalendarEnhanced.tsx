@@ -2464,7 +2464,7 @@ function EventFormDialog({
                   <Users className="h-3 w-3" /> GUESTS
                 </Label>
 
-                <div className="space-y-1.5 mb-2 max-h-40 overflow-y-auto pr-1">
+                <div className="space-y-1.5 mb-2 max-h-40 overflow-y-auto pr-1" style={{ maxHeight: '160px', overflowY: 'auto', contain: 'strict' }}>
                   {form.guests.length === 0 && (
                     <p className="text-xs text-muted-foreground">No guests added yet.</p>
                   )}
@@ -2544,10 +2544,10 @@ function EventFormDialog({
                       </Button>
                     </motion.div>
                   </PopoverTrigger>
-                  <PopoverContent className="w-80 p-0" align="start">
+                  <PopoverContent className="w-80 p-0" align="start" onWheel={(e) => e.stopPropagation()}>
                     <Command>
                       <CommandInput placeholder="Search team members…" value={guestSearch} onValueChange={setGuestSearch} />
-                      <CommandList>
+                      <CommandList className="max-h-[200px] overflow-y-auto" style={{ maxHeight: '200px', overflowY: 'auto' }} onWheel={(e) => e.stopPropagation()}>
                         <CommandEmpty>No matching team members.</CommandEmpty>
                         <CommandGroup heading="Team">
                           {availableEmployees.slice(0, 30).map((emp) => (

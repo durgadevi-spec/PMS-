@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 ============================================================ */
 interface TaskItem {
     id: string;
+    projectId?: string | number;
     taskName: string;
     startDate?: string | null;
     endDate?: string | null;
@@ -191,6 +192,12 @@ export default function GanttDependencyDialog({
         return tasks
             .filter(t => t.startDate && t.endDate && toDateOnly(t.startDate) && toDateOnly(t.endDate))
             .filter(t => {
+                if (projectId && projectId !== "all") {
+                    return String(t.projectId) === String(projectId);
+                }
+                return true;
+            })
+            .filter(t => {
                 if (selectedKsFilter === "all") return true;
                 if (selectedKsFilter === "none") return !t.keyStepId;
                 return String(t.keyStepId) === selectedKsFilter;
@@ -200,13 +207,16 @@ export default function GanttDependencyDialog({
                 const db = toDateOnly(b.startDate)!.getTime();
                 return da - db;
             });
-    }, [tasks, selectedKsFilter]);
+    }, [tasks, selectedKsFilter, projectId]);
 
     // Project-specific key steps (filter by tasks present in data)
     const projectKeySteps = useMemo(() => {
-        const ksIdsInTasks = new Set(tasks.map(t => t.keyStepId).filter(Boolean));
+        const filteredTasks = projectId && projectId !== "all"
+            ? tasks.filter(t => String(t.projectId) === String(projectId))
+            : tasks;
+        const ksIdsInTasks = new Set(filteredTasks.map(t => t.keyStepId).filter(Boolean));
         return keySteps.filter(ks => ksIdsInTasks.has(ks.id));
-    }, [keySteps, tasks]);
+    }, [keySteps, tasks, projectId]);
 
     const filteredKsOptions = projectKeySteps.filter(ks =>
         ks.title.toLowerCase().includes(ksSearch.toLowerCase())
