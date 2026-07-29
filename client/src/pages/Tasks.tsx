@@ -6481,40 +6481,84 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                           <Fragment key="startDate">
                                             {/* Subtask Start Date */}
                                             <td className="px-2 py-0.5 text-center border-r font-medium text-slate-600">
-                                              <Input
-                                                type="date"
-                                                className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 hover:bg-slate-100 focus:bg-white text-center"
-                                                value={subtask.startDate || ""}
-                                                onChange={async (e) => {
-                                                  const newStartDate = e.target.value;
-                                                  const body: any = { startDate: newStartDate };
-                                                  if (subtask.endDate && newStartDate && subtask.endDate < newStartDate) {
-                                                    body.endDate = newStartDate;
-                                                  }
-
-                                                  // Optimistic update — keep the row (and any sibling
-                                                  // expanded subtasks) exactly as-is instead of forcing
-                                                  // a full task list refetch, which only returns
-                                                  // subtaskCount and would wipe them out.
-                                                  setTasks(prev => prev.map(t => t.id !== task.id ? t : {
-                                                    ...t,
-                                                    subtasks: (t.subtasks || []).map(s => s.id === subtask.id ? { ...s, ...body } : s),
-                                                  }));
-
-                                                  try {
-                                                    const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
-                                                      method: "PATCH",
-                                                      headers: { "Content-Type": "application/json" },
-                                                      body: JSON.stringify(body),
+                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "startDate" ? (
+                                                <Input
+                                                  type="date"
+                                                  autoFocus
+                                                  className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 text-center"
+                                                  value={tempSubtaskValue}
+                                                  onChange={(e) => setTempSubtaskValue(e.target.value)}
+                                                  onBlur={async () => {
+                                                    const newStartDate = tempSubtaskValue || null;
+                                                    const updatedSubtasks = (task.subtasks || []).map(s => {
+                                                      if (s.id === subtask.id) {
+                                                        const updated = { ...s, startDate: newStartDate };
+                                                        if (s.endDate && newStartDate && s.endDate < newStartDate) {
+                                                          updated.endDate = newStartDate;
+                                                        }
+                                                        return updated;
+                                                      }
+                                                      return s;
                                                     });
-                                                    if (!res.ok) throw new Error("Failed to update subtask date");
-                                                  } catch (err) {
-                                                    console.error(err);
-                                                    toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
-                                                    refreshTasks();
-                                                  }
-                                                }}
-                                              />
+                                                    
+                                                    // Recalculate parent task dates
+                                                    const validStarts = updatedSubtasks.map(s => s.startDate).filter(Boolean) as string[];
+                                                    const validEnds = updatedSubtasks.map(s => s.endDate).filter(Boolean) as string[];
+                                                    
+                                                    const newParentStart = validStarts.length > 0 ? validStarts.reduce((min, cur) => cur < min ? cur : min) : null;
+                                                    const newParentEnd = validEnds.length > 0 ? validEnds.reduce((max, cur) => cur > max ? cur : max) : null;
+                                                    
+                                                    let durationDays = task.durationDays;
+                                                    if (newParentStart && newParentEnd) {
+                                                      const sD = new Date(newParentStart);
+                                                      const eD = new Date(newParentEnd);
+                                                      if (!isNaN(sD.getTime()) && !isNaN(eD.getTime())) {
+                                                        const diff = Math.round((eD.getTime() - sD.getTime()) / (1000 * 60 * 60 * 24));
+                                                        if (diff >= 0) durationDays = diff;
+                                                      }
+                                                    }
+                                                    
+                                                    setTasks(prev => prev.map(t => t.id !== task.id ? t : {
+                                                      ...t,
+                                                      startDate: newParentStart || undefined,
+                                                      endDate: newParentEnd || undefined,
+                                                      durationDays,
+                                                      subtasks: updatedSubtasks,
+                                                    }));
+                                                    setEditingSubtaskField(null);
+                                                    
+                                                    const body: any = { startDate: newStartDate };
+                                                    const targetSub = updatedSubtasks.find(s => s.id === subtask.id);
+                                                    if (targetSub && targetSub.endDate !== subtask.endDate) {
+                                                      body.endDate = targetSub.endDate;
+                                                    }
+                                                    
+                                                    try {
+                                                      const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
+                                                        method: "PATCH",
+                                                        headers: { "Content-Type": "application/json" },
+                                                        body: JSON.stringify(body),
+                                                      });
+                                                      if (!res.ok) throw new Error("Failed to update subtask date");
+                                                    } catch (err) {
+                                                      console.error(err);
+                                                      toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
+                                                      refreshTasks();
+                                                    }
+                                                  }}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === 'Escape') setEditingSubtaskField(null);
+                                                    if (e.key === 'Enter') e.currentTarget.blur();
+                                                  }}
+                                                />
+                                              ) : (
+                                                <span
+                                                  className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-block w-full text-center text-xs"
+                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "startDate", subtask.startDate || ""); }}
+                                                >
+                                                  {formatDate(subtask.startDate) || "—"}
+                                                </span>
+                                              )}
                                             </td>
                                           </Fragment>
                                         );
@@ -6522,37 +6566,73 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                           <Fragment key="endDate">
                                             {/* Subtask End Date */}
                                             <td className="px-2 py-0.5 text-center border-r font-medium text-slate-600">
-                                              <Input
-                                                type="date"
-                                                className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 hover:bg-slate-100 focus:bg-white text-center"
-                                                value={subtask.endDate || ""}
-                                                min={subtask.startDate || undefined}
-                                                onChange={async (e) => {
-                                                  const newEndDate = subtask.startDate && e.target.value && e.target.value < subtask.startDate
-                                                    ? subtask.startDate
-                                                    : e.target.value;
-
-                                                  // Optimistic update — see Start Date handler above for why
-                                                  // we avoid refreshTasks() here.
-                                                  setTasks(prev => prev.map(t => t.id !== task.id ? t : {
-                                                    ...t,
-                                                    subtasks: (t.subtasks || []).map(s => s.id === subtask.id ? { ...s, endDate: newEndDate } : s),
-                                                  }));
-
-                                                  try {
-                                                    const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
-                                                      method: "PATCH",
-                                                      headers: { "Content-Type": "application/json" },
-                                                      body: JSON.stringify({ endDate: newEndDate }),
-                                                    });
-                                                    if (!res.ok) throw new Error("Failed to update subtask date");
-                                                  } catch (err) {
-                                                    console.error(err);
-                                                    toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
-                                                    refreshTasks();
-                                                  }
-                                                }}
-                                              />
+                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "endDate" ? (
+                                                <Input
+                                                  type="date"
+                                                  autoFocus
+                                                  className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 text-center"
+                                                  value={tempSubtaskValue}
+                                                  min={subtask.startDate || undefined}
+                                                  onChange={(e) => setTempSubtaskValue(e.target.value)}
+                                                  onBlur={async () => {
+                                                    const newEndDate = subtask.startDate && tempSubtaskValue && tempSubtaskValue < subtask.startDate
+                                                      ? subtask.startDate
+                                                      : (tempSubtaskValue || null);
+                                                    
+                                                    const updatedSubtasks = (task.subtasks || []).map(s => s.id === subtask.id ? { ...s, endDate: newEndDate } : s);
+                                                    
+                                                    // Recalculate parent task dates
+                                                    const validStarts = updatedSubtasks.map(s => s.startDate).filter(Boolean) as string[];
+                                                    const validEnds = updatedSubtasks.map(s => s.endDate).filter(Boolean) as string[];
+                                                    
+                                                    const newParentStart = validStarts.length > 0 ? validStarts.reduce((min, cur) => cur < min ? cur : min) : null;
+                                                    const newParentEnd = validEnds.length > 0 ? validEnds.reduce((max, cur) => cur > max ? cur : max) : null;
+                                                    
+                                                    let durationDays = task.durationDays;
+                                                    if (newParentStart && newParentEnd) {
+                                                      const sD = new Date(newParentStart);
+                                                      const eD = new Date(newParentEnd);
+                                                      if (!isNaN(sD.getTime()) && !isNaN(eD.getTime())) {
+                                                        const diff = Math.round((eD.getTime() - sD.getTime()) / (1000 * 60 * 60 * 24));
+                                                        if (diff >= 0) durationDays = diff;
+                                                      }
+                                                    }
+                                                    
+                                                    setTasks(prev => prev.map(t => t.id !== task.id ? t : {
+                                                      ...t,
+                                                      startDate: newParentStart || undefined,
+                                                      endDate: newParentEnd || undefined,
+                                                      durationDays,
+                                                      subtasks: updatedSubtasks,
+                                                    }));
+                                                    setEditingSubtaskField(null);
+                                                    
+                                                    try {
+                                                      const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
+                                                        method: "PATCH",
+                                                        headers: { "Content-Type": "application/json" },
+                                                        body: JSON.stringify({ endDate: newEndDate }),
+                                                      });
+                                                      if (!res.ok) throw new Error("Failed to update subtask date");
+                                                    } catch (err) {
+                                                      console.error(err);
+                                                      toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
+                                                      refreshTasks();
+                                                    }
+                                                  }}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === 'Escape') setEditingSubtaskField(null);
+                                                    if (e.key === 'Enter') e.currentTarget.blur();
+                                                  }}
+                                                />
+                                              ) : (
+                                                <span
+                                                  className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-block w-full text-center text-xs"
+                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "endDate", subtask.endDate || ""); }}
+                                                >
+                                                  {formatDate(subtask.endDate) || "—"}
+                                                </span>
+                                              )}
                                             </td>
                                           </Fragment>
                                         );
