@@ -4469,6 +4469,7 @@ export async function registerRoutes(
       }
 
       if (typeof data.keyStepId !== 'undefined') updateData.keyStepId = data.keyStepId || null;
+      if (typeof data.taskOwnerId !== 'undefined') updateData.taskOwnerId = data.taskOwnerId || null;
       if (typeof data.progress !== 'undefined' && typeof updateData.progress === 'undefined') updateData.progress = Number(data.progress);
       if (typeof data.isAddon !== 'undefined') updateData.isAddon = Boolean(data.isAddon);
       if (typeof data.isIssue !== 'undefined') updateData.isIssue = Boolean(data.isIssue);
