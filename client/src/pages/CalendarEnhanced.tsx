@@ -2464,7 +2464,7 @@ function EventFormDialog({
                   <Users className="h-3 w-3" /> GUESTS
                 </Label>
 
-                <div className="space-y-1.5 mb-2 max-h-40 overflow-y-auto pr-1" style={{ maxHeight: '160px', overflowY: 'auto', contain: 'strict' }}>
+                <div className="space-y-1.5 mb-2 max-h-40 overflow-y-auto pr-1" style={{ maxHeight: '160px', overflowY: 'auto', contain: 'paint' }}>
                   {form.guests.length === 0 && (
                     <p className="text-xs text-muted-foreground">No guests added yet.</p>
                   )}
