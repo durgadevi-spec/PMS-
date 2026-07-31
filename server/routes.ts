@@ -4395,6 +4395,9 @@ export async function registerRoutes(
         }
       }
       if (typeof data.priority !== 'undefined') updateData.priority = data.priority || "medium";
+      if (typeof data.assignerId !== 'undefined') updateData.assignerId = data.assignerId || null;
+      if (typeof data.projectId !== 'undefined') updateData.projectId = data.projectId || null;
+      if (typeof data.parentTaskId !== 'undefined') updateData.parentTaskId = data.parentTaskId || null;
       if (typeof data.startDate !== 'undefined') updateData.startDate = data.startDate || null;
       if (typeof data.endDate !== 'undefined') updateData.endDate = data.endDate || null;
 
