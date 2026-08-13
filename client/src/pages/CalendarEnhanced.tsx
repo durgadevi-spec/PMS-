@@ -42,6 +42,9 @@ import {
   Check,
   Clock,
   CalendarClock,
+  Square,
+  CheckSquare2,
+  ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -168,6 +171,53 @@ interface ModalState {
   draft: CalendarEvent;
 }
 
+// A lightweight view of a real PMS project task (from /api/tasks/bulk), used
+// to render the Google-Calendar-style "Tasks" strip on each day. This is
+// intentionally separate from CalendarEvent — it's not a calendar event, it's
+// a project task that happens to have a due date.
+interface PmsTask {
+  id: string;
+  taskName: string;
+  description?: string | null;
+  status: string | null;
+  priority: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  projectId: string;
+  projectTitle?: string;
+  taskOwnerId: string | null;
+  assignerId: string;
+  assignedMembers?: string[];
+}
+
+interface TaskModalState {
+  date: string; // yyyy-MM-dd
+}
+
+// A task created from the Calendar page itself (Google-Calendar-"Tasks"
+// style). This is intentionally its OWN record, stored separately from PMS
+// project tasks — adding, completing, editing, or deleting one here never
+// touches /api/tasks or the Tasks page. It lives only on the calendar.
+interface CalendarTask {
+  id: string;
+  title: string;
+  date: string; // yyyy-MM-dd
+  startTime: string; // HH:mm, "" if not set
+  endTime: string; // HH:mm, "" if not set
+  allDay: boolean;
+  notes: string;
+  done: boolean;
+  createdAt: string;
+}
+
+// One row in a day's "Tasks" strip — either a calendar-only task (fully
+// editable from here) or a real PMS project task shown for visibility only
+// (read-only: view details, but no complete/delete from the calendar — that
+// stays on the Tasks page, which owns that data).
+type DayTaskItem =
+  | { kind: "calendar"; id: string; title: string; done: boolean; data: CalendarTask }
+  | { kind: "project"; id: string; title: string; done: boolean; data: PmsTask };
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const CALENDAR_TYPES: { key: string; label: string; color: string }[] = [
@@ -277,6 +327,37 @@ const persistActiveTypes = (userId: string | undefined, activeTypes: Set<string>
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(activeTypesStorageKey(userId), JSON.stringify(Array.from(activeTypes)));
+  } catch {
+    /* ignore quota errors */
+  }
+};
+
+// ─── Calendar-only tasks (separate from the Tasks page) ────────────────────
+// These live entirely in the browser, keyed per user, and never touch
+// /api/tasks — the real PMS project tasks table. This keeps "Add task" on
+// the Calendar page fully independent of the Tasks page, as requested: the
+// calendar can still SHOW that day's real project tasks (read-only, pulled
+// live from the Tasks page's data), but anything created/completed/deleted
+// via the calendar's own task UI only affects this separate store.
+const calendarTasksStorageKey = (userId?: string) =>
+  userId ? `pms_calendar_own_tasks_${userId}` : "pms_calendar_own_tasks_guest";
+
+const loadCalendarTasks = (userId?: string): CalendarTask[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(calendarTasksStorageKey(userId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const persistCalendarTasks = (userId: string | undefined, tasks: CalendarTask[]) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(calendarTasksStorageKey(userId), JSON.stringify(tasks));
   } catch {
     /* ignore quota errors */
   }
@@ -597,6 +678,147 @@ function EventChip({
         </div>
       )}
     </motion.div>
+  );
+}
+
+// A single task pill on a calendar day, in the spirit of Google Calendar's
+// "Tasks" strip — a checkbox + title, visually distinct (dashed left edge)
+// from event chips so the two are never confused.
+const TASK_HEX = "#0E8A7D";
+
+function TaskChip({
+  item,
+  compact,
+  onToggle,
+  onOpenTask,
+  onDelete,
+}: {
+  item: DayTaskItem;
+  compact?: boolean;
+  onToggle: () => void;
+  onOpenTask: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const done = item.done;
+  const isProject = item.kind === "project";
+  const priority = item.kind === "project" ? item.data.priority : null;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <motion.div
+          layout
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          whileHover={{ y: -1 }}
+          className={cn(
+            "group relative flex items-center gap-1 overflow-hidden rounded-md border-l-[3px] border-dashed select-none cursor-pointer",
+            compact ? "px-1.5 py-0.5 mb-0.5" : "px-2 py-1"
+          )}
+          style={{
+            borderLeftColor: TASK_HEX,
+            background: hexToRgba(TASK_HEX, compact ? 0.1 : 0.08),
+          }}
+          title={isProject ? `${item.title} (from Tasks page — view only)` : item.title}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+          }}
+        >
+          {isProject ? (
+            // Project tasks are read-only on the calendar — a small
+            // briefcase marks it as coming from the Tasks page, with no
+            // checkbox to toggle here.
+            <Briefcase className="h-3 w-3 shrink-0 text-[#0E8A7D]/70" />
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+              className="shrink-0 text-[#0E8A7D]/80 hover:text-[#0E8A7D]"
+              title={done ? "Mark task incomplete" : "Mark task complete"}
+            >
+              {done ? <CheckSquare2 className="h-3 w-3" /> : <Square className="h-3 w-3" />}
+            </button>
+          )}
+          <span
+            className={cn(
+              "font-semibold truncate leading-tight",
+              compact ? "text-[11px]" : "text-xs",
+              done && "line-through decoration-2 text-muted-foreground/70"
+            )}
+            style={done ? undefined : { color: TASK_HEX }}
+          >
+            {item.title || "Untitled task"}
+          </span>
+        </motion.div>
+      </PopoverTrigger>
+
+      {/* Google-Calendar-style task detail popover: a quick summary plus
+          Open / Complete / Delete actions, instead of jumping straight to
+          the full edit-task page on every click. Project tasks only get
+          "View details" — they're read-only from the calendar. */}
+      <PopoverContent
+        className="w-64 p-3 border-[#E2DFD6]"
+        align="start"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-2 mb-3">
+          {isProject ? (
+            <Briefcase className="h-4 w-4 shrink-0 mt-0.5 text-[#0E8A7D]/70" />
+          ) : (
+            <button
+              type="button"
+              onClick={() => onToggle()}
+              className="shrink-0 mt-0.5 text-[#0E8A7D]/80 hover:text-[#0E8A7D]"
+              title={done ? "Mark task incomplete" : "Mark task complete"}
+            >
+              {done ? <CheckSquare2 className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+            </button>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className={cn("text-sm font-semibold leading-snug", done && "line-through text-muted-foreground")}>
+              {item.title || "Untitled task"}
+            </div>
+            {isProject ? (
+              <div className="text-[10px] text-muted-foreground mt-0.5">From the Tasks page · view only</div>
+            ) : (
+              priority && <div className="text-[10px] text-muted-foreground capitalize mt-0.5">{priority} priority</div>
+            )}
+          </div>
+        </div>
+        <div className="flex gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1 h-7 text-xs border-[#E2DFD6]"
+            onClick={() => {
+              setOpen(false);
+              onOpenTask();
+            }}
+          >
+            View details
+          </Button>
+          {!isProject && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-destructive hover:text-destructive"
+              title="Delete task"
+              onClick={() => {
+                setOpen(false);
+                onDelete();
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1041,6 +1263,152 @@ export default function CalendarEnhanced() {
   );
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+
+  // ── Tasks-on-the-calendar ────────────────────────────────────────────────
+  // Two fully independent sources feed the "Tasks" strip:
+  //
+  //  1. `myTasks` — real PMS project tasks, fetched from /api/tasks so that
+  //     day's real tasks show up (as the Tasks page owns them). This feed is
+  //     READ-ONLY from the calendar: no complete/delete/edit here, only
+  //     "View details" — editing that task stays on the Tasks page.
+  //
+  //  2. `myCalendarTasks` — tasks created via the calendar's own "Add task",
+  //     stored separately (see loadCalendarTasks/persistCalendarTasks) and
+  //     never touching /api/tasks. Adding, completing, editing, or deleting
+  //     one of these only ever affects the calendar — the Tasks page never
+  //     sees it.
+  const [myTasks, setMyTasks] = useState<PmsTask[]>([]);
+  const [myCalendarTasks, setMyCalendarTasks] = useState<CalendarTask[]>([]);
+  const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
+  const [taskDetail, setTaskDetail] = useState<DayTaskItem | null>(null);
+
+  const loadMyTasks = () => {
+    if (!user?.employeeId) {
+      setMyTasks([]);
+      return;
+    }
+    Promise.all([
+      apiFetch("/api/tasks/bulk?status=all", { bypassCache: true }).then((res) => res.json()),
+      apiFetch("/api/projects").then((res) => res.json()).catch(() => []),
+    ])
+      .then(([data, projectData]) => {
+        const list = Array.isArray(data) ? data : [];
+        const projects = Array.isArray(projectData) ? projectData : [];
+        const projectTitleById = new Map<string, string>(
+          projects.map((p: any) => [p.id, p.title || p.projectCode || "Untitled project"])
+        );
+        // Only tasks where you're actually the owner or an assignee show up
+        // on your calendar — a task you merely created (as assigner) for
+        // someone else doesn't belong on your own calendar.
+        const mine = list
+          .filter(
+            (t: any) =>
+              t.taskOwnerId === user.employeeId ||
+              (Array.isArray(t.assignedMembers) && t.assignedMembers.includes(user.employeeId))
+          )
+          .map((t: any) => ({ ...t, projectTitle: projectTitleById.get(t.projectId) || "" }));
+        setMyTasks(mine);
+      })
+      .catch((err) => console.error("Failed to load tasks:", err));
+  };
+
+  useEffect(() => {
+    loadMyTasks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.employeeId]);
+
+  // Load calendar-only tasks from local storage whenever the user changes,
+  // and persist them back on every change. Entirely separate from the
+  // /api/tasks calls above.
+  useEffect(() => {
+    setMyCalendarTasks(loadCalendarTasks(user?.id));
+  }, [user?.id]);
+
+  useEffect(() => {
+    persistCalendarTasks(user?.id, myCalendarTasks);
+  }, [user?.id, myCalendarTasks]);
+
+  // Completed tasks are left out entirely, matching Google Calendar Tasks —
+  // once you check a task off, it disappears from the calendar rather than
+  // sticking around with a strikethrough.
+  const isTaskDone = (t: PmsTask) => t.status === "Completed" || t.status === "completed";
+
+  // Group both task sources across every day they span. Real project tasks
+  // span Start Date → End Date inclusive; calendar-only tasks live on a
+  // single date. Each entry is tagged with its `kind` so the UI knows
+  // whether it's editable (calendar) or view-only (project).
+  const tasksByDate = useMemo(() => {
+    const map: Record<string, DayTaskItem[]> = {};
+
+    myTasks.forEach((t) => {
+      if (isTaskDone(t)) return;
+      const startStr = t.startDate ? String(t.startDate).slice(0, 10) : null;
+      const endStr = t.endDate ? String(t.endDate).slice(0, 10) : null;
+      const rawStart = startStr || endStr;
+      const rawEnd = endStr || startStr;
+      if (!rawStart || !rawEnd) return;
+      const [firstStr, lastStr] = rawStart <= rawEnd ? [rawStart, rawEnd] : [rawEnd, rawStart];
+      let cursor = parseISO(firstStr);
+      const last = parseISO(lastStr);
+      let count = 0;
+      // Safety cap so a bad/very-far-apart date pair can't loop forever.
+      while (cursor <= last && count < 90) {
+        const dateKey = format(cursor, "yyyy-MM-dd");
+        if (!map[dateKey]) map[dateKey] = [];
+        map[dateKey].push({ kind: "project", id: t.id, title: t.taskName, done: false, data: t });
+        cursor = addDays(cursor, 1);
+        count++;
+      }
+    });
+
+    myCalendarTasks.forEach((t) => {
+      if (t.done) return;
+      if (!t.date) return;
+      if (!map[t.date]) map[t.date] = [];
+      map[t.date].push({ kind: "calendar", id: t.id, title: t.title, done: t.done, data: t });
+    });
+
+    Object.values(map).forEach((arr) => arr.sort((a, b) => a.title.localeCompare(b.title)));
+    return map;
+  }, [myTasks, myCalendarTasks]);
+
+  const openNewTask = (date: Date) => {
+    setTaskModal({ date: format(date, "yyyy-MM-dd") });
+  };
+
+  // Opens task details right inside the calendar — the Tasks page is a
+  // separate part of the app, so clicking a task here should never leave
+  // the calendar. Project tasks open in a read-only view; calendar tasks
+  // open fully editable.
+  const openTask = (item: DayTaskItem) => {
+    setTaskDetail(item);
+  };
+
+  const toggleCalendarTaskDone = (task: CalendarTask) => {
+    setMyCalendarTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, done: !t.done } : t)));
+  };
+
+  const deleteCalendarTask = (task: CalendarTask) => {
+    setMyCalendarTasks((prev) => prev.filter((t) => t.id !== task.id));
+    toast({ title: "Task deleted" });
+  };
+
+  // Branch on kind so the render call sites don't need to know the
+  // difference — but a project task's toggle/delete is a no-op, since
+  // those stay read-only from the calendar.
+  const toggleDayTask = (item: DayTaskItem) => {
+    if (item.kind === "calendar") toggleCalendarTaskDone(item.data);
+  };
+
+  const deleteDayTask = (item: DayTaskItem) => {
+    if (item.kind === "calendar") deleteCalendarTask(item.data);
+  };
+
+  const handleTaskCreated = (task: CalendarTask) => {
+    setMyCalendarTasks((prev) => [...prev, task]);
+    setTaskModal(null);
+    toast({ title: "Task added", description: `"${task.title}" was added to your calendar (calendar-only, not on the Tasks page).` });
+  };
 
   // Load / persist events for this user
   useEffect(() => {
@@ -1551,13 +1919,22 @@ export default function CalendarEnhanced() {
             transition={{ duration: 0.22, ease: "easeInOut" }}
             className="border-r border-[#E2DFD6] flex flex-col shrink-0 overflow-y-auto overflow-x-hidden bg-white"
           >
-            <div className="w-64 p-3">
+            <div className="w-64 p-3 space-y-1.5">
               <motion.div whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}>
                 <Button
                   onClick={() => openNew(selectedDate, 9)}
                   className="w-full justify-start gap-2 rounded-lg shadow-sm bg-[#3C5A73] hover:bg-[#33506A] text-white border-0"
                 >
                   <Plus className="h-4 w-4" /> Create event
+                </Button>
+              </motion.div>
+              <motion.div whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}>
+                <Button
+                  onClick={() => openNewTask(selectedDate)}
+                  variant="outline"
+                  className="w-full justify-start gap-2 rounded-lg border-[#E2DFD6] hover:border-[#0E8A7D] hover:text-[#0E8A7D]"
+                >
+                  <ListChecks className="h-4 w-4" /> Add task
                 </Button>
               </motion.div>
             </div>
@@ -1752,6 +2129,7 @@ export default function CalendarEnhanced() {
                   const dayOccs = occurrences
                     .filter((o) => o.occurrenceDate === dayStr)
                     .sort((a, b) => (a.allDay ? -1 : toMin(a.startTime) - toMin(b.startTime)));
+                  const dayTasks = tasksByDate[dayStr] || [];
                   const inMonth = isSameMonth(day, selectedDate);
                   const isTod = isTodayFn(day);
                   return (
@@ -1769,7 +2147,8 @@ export default function CalendarEnhanced() {
                         !inMonth && "bg-[#FAF9F6]/60"
                       )}
                     >
-                      <div className="flex justify-center mb-0.5">
+                      <div className="flex items-center justify-between mb-0.5 px-0.5 group/day">
+                        <span className="w-4" />
                         <span
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1785,7 +2164,28 @@ export default function CalendarEnhanced() {
                         >
                           {format(day, "d")}
                         </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openNewTask(day);
+                          }}
+                          className="w-4 h-4 flex items-center justify-center rounded text-muted-foreground/0 group-hover/day:text-[#0E8A7D] hover:bg-[#0E8A7D]/10 transition-colors"
+                          title="Add task"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
                       </div>
+                      {dayTasks.slice(0, 2).map((t) => (
+                        <TaskChip
+                          key={t.id}
+                          item={t}
+                          compact
+                          onToggle={() => toggleDayTask(t)}
+                          onOpenTask={() => openTask(t)}
+                          onDelete={() => deleteDayTask(t)}
+                        />
+                      ))}
                       {dayOccs.slice(0, 3).map((occ) => (
                         <EventChip
                           key={`${occ.id}-${occ.occurrenceDate}`}
@@ -1796,8 +2196,10 @@ export default function CalendarEnhanced() {
                           onDragStart={(e) => e.dataTransfer.setData("text/plain", occ.id)}
                         />
                       ))}
-                      {dayOccs.length > 3 && (
-                        <div className="text-[10px] font-medium text-[#3C5A73] pl-1.5">+{dayOccs.length - 3} more</div>
+                      {(dayOccs.length > 3 || dayTasks.length > 2) && (
+                        <div className="text-[10px] font-medium text-[#3C5A73] pl-1.5">
+                          +{Math.max(0, dayOccs.length - 3) + Math.max(0, dayTasks.length - 2)} more
+                        </div>
                       )}
                     </div>
                   );
@@ -1807,24 +2209,11 @@ export default function CalendarEnhanced() {
           )}
 
           {viewMode === "week" && (
-            <div className="flex flex-1">
-              <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70">
-                <div className="h-6" />
-                <div className="relative" style={{ height: HOURS.length * ROW_H }}>
-                  {HOURS.map((h) => (
-                    <div
-                      key={h}
-                      className="absolute right-0 flex items-center gap-1"
-                      style={{ top: h * ROW_H, transform: "translateY(-50%)" }}
-                    >
-                      <span className="text-[9px] font-mono text-muted-foreground/70">{fmtHour(h)}</span>
-                      <span className="block w-1.5 h-px bg-[#E2DFD6]" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="flex-1 flex flex-col min-w-0">
-                <div className="flex h-6 border-b border-[#E2DFD6] shrink-0">
+            <div className="flex-1 flex flex-col">
+              {/* Day headers row (spans full width, above the hourly grid) */}
+              <div className="flex shrink-0">
+                <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70" />
+                <div className="flex-1 flex h-6 border-b border-[#E2DFD6]">
                   {weekDays.map((day) => {
                     const isTod = isTodayFn(day);
                     return (
@@ -1837,7 +2226,56 @@ export default function CalendarEnhanced() {
                     );
                   })}
                 </div>
-                <div className="flex flex-1">
+              </div>
+
+              {/* Tasks band — also spans full width, sitting ABOVE the hourly
+                  timeline (not inside any hour slot), Google-Calendar-style.
+                  Because this row is its own flex row (not nested inside the
+                  content column only), the hour gutter below stays aligned
+                  with the actual hour rows no matter how tall this gets. */}
+              {Object.keys(tasksByDate).length > 0 && (
+                <div className="flex shrink-0">
+                  <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70" />
+                  <div className="flex-1 flex border-b border-[#E2DFD6]/70 bg-[#0E8A7D]/[0.03]">
+                    {weekDays.map((day) => {
+                      const dayStr = format(day, "yyyy-MM-dd");
+                      const dayTasks = tasksByDate[dayStr] || [];
+                      return (
+                        <div key={day.toISOString()} className="flex-1 border-l border-[#E2DFD6]/70 px-1 py-1 min-w-0">
+                          {dayTasks.map((t) => (
+                            <TaskChip
+                              key={t.id}
+                              item={t}
+                              compact
+                              onToggle={() => toggleDayTask(t)}
+                              onOpenTask={() => openTask(t)}
+                              onDelete={() => deleteDayTask(t)}
+                            />
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Hourly timeline — gutter + day columns scroll and align together */}
+              <div className="flex flex-1">
+                <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70">
+                  <div className="relative" style={{ height: HOURS.length * ROW_H }}>
+                    {HOURS.map((h) => (
+                      <div
+                        key={h}
+                        className="absolute right-0 flex items-center gap-1"
+                        style={{ top: h * ROW_H, transform: "translateY(-50%)" }}
+                      >
+                        <span className="text-[9px] font-mono text-muted-foreground/70">{fmtHour(h)}</span>
+                        <span className="block w-1.5 h-px bg-[#E2DFD6]" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex-1 flex min-w-0">
                   {weekDays.map((day) => {
                     const dayStr = format(day, "yyyy-MM-dd");
                     return (
@@ -1859,24 +2297,11 @@ export default function CalendarEnhanced() {
           )}
 
           {viewMode === "day" && (
-            <div className="flex flex-1">
-              <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70">
-                <div className="h-8" />
-                <div className="relative" style={{ height: HOURS.length * ROW_H }}>
-                  {HOURS.map((h) => (
-                    <div
-                      key={h}
-                      className="absolute right-0 flex items-center gap-1"
-                      style={{ top: h * ROW_H, transform: "translateY(-50%)" }}
-                    >
-                      <span className="text-[9px] font-mono text-muted-foreground/70">{fmtHour(h)}</span>
-                      <span className="block w-1.5 h-px bg-[#E2DFD6]" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="flex-1 flex flex-col min-w-0">
-                <div className="h-8 border-b border-[#E2DFD6] flex items-center pl-3 gap-2 shrink-0">
+            <div className="flex-1 flex flex-col">
+              {/* Date header row (spans full width, above the hourly grid) */}
+              <div className="flex shrink-0">
+                <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70" />
+                <div className="flex-1 h-8 border-b border-[#E2DFD6] flex items-center pl-3 gap-2">
                   <span className={cn("text-xs font-mono", isTodayFn(selectedDate) ? "text-[#3C5A73] font-semibold" : "text-muted-foreground")}>
                     {format(selectedDate, "EEE").toUpperCase()}
                   </span>
@@ -1889,7 +2314,66 @@ export default function CalendarEnhanced() {
                     {format(selectedDate, "d")}
                   </span>
                 </div>
-                <div className="flex flex-1">
+              </div>
+
+              {/* Tasks band — also spans full width, sitting ABOVE the hourly
+                  timeline (not inside any hour slot), Google-Calendar-style.
+                  A separate flex row keeps the hour gutter below aligned with
+                  the actual hour rows no matter how many tasks wrap here. */}
+              {(() => {
+                const dayStr = format(selectedDate, "yyyy-MM-dd");
+                const dayTasks = tasksByDate[dayStr] || [];
+                return (
+                  <div className="flex shrink-0">
+                    <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70" />
+                    <div className="flex-1 border-b border-[#E2DFD6]/70 bg-[#0E8A7D]/[0.03] px-3 py-1.5 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-display font-semibold text-[#0E8A7D] tracking-[0.1em]">TASKS</span>
+                        <button
+                          type="button"
+                          onClick={() => openNewTask(selectedDate)}
+                          className="text-[10px] text-[#0E8A7D] hover:underline flex items-center gap-0.5"
+                        >
+                          <Plus className="h-3 w-3" /> Add task
+                        </button>
+                      </div>
+                      {dayTasks.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground">No tasks due today.</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {dayTasks.map((t) => (
+                            <TaskChip
+                              key={t.id}
+                              item={t}
+                              onToggle={() => toggleDayTask(t)}
+                              onOpenTask={() => openTask(t)}
+                              onDelete={() => deleteDayTask(t)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Hourly timeline — gutter + day column scroll and align together */}
+              <div className="flex flex-1">
+                <div className="w-12 shrink-0 bg-[#FAF9F6]/60 border-r border-[#E2DFD6]/70">
+                  <div className="relative" style={{ height: HOURS.length * ROW_H }}>
+                    {HOURS.map((h) => (
+                      <div
+                        key={h}
+                        className="absolute right-0 flex items-center gap-1"
+                        style={{ top: h * ROW_H, transform: "translateY(-50%)" }}
+                      >
+                        <span className="text-[9px] font-mono text-muted-foreground/70">{fmtHour(h)}</span>
+                        <span className="block w-1.5 h-px bg-[#E2DFD6]" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
                   <DayColumn
                     dayStr={format(selectedDate, "yyyy-MM-dd")}
                     occurrences={occurrences}
@@ -1918,7 +2402,307 @@ export default function CalendarEnhanced() {
           onResolveProposal={resolveProposal}
         />
       )}
+
+      {taskModal && (
+        <QuickAddTaskDialog
+          date={taskModal.date}
+          onClose={() => setTaskModal(null)}
+          onCreated={handleTaskCreated}
+        />
+      )}
+
+      {taskDetail && (
+        <TaskDetailDialog
+          item={taskDetail}
+          onClose={() => setTaskDetail(null)}
+          onToggle={() => {
+            if (taskDetail.kind !== "calendar") return;
+            toggleCalendarTaskDone(taskDetail.data);
+            setTaskDetail((t) => (t && t.kind === "calendar" ? { ...t, done: !t.done, data: { ...t.data, done: !t.data.done } } : t));
+          }}
+          onDelete={() => {
+            if (taskDetail.kind !== "calendar") return;
+            deleteCalendarTask(taskDetail.data);
+            setTaskDetail(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Task detail dialog ─────────────────────────────────────────────────────
+// Shows a task's details right inside the calendar — the Tasks page is a
+// separate part of the app, so clicking a task on the calendar should never
+// navigate away from it. Behavior depends on where the task came from:
+//   - "calendar" tasks (added from this calendar) are fully editable here:
+//     complete / delete, exactly like a Google Calendar Task.
+//   - "project" tasks (real PMS tasks, shown for visibility) are read-only:
+//     no complete/delete — that stays on the Tasks page, which owns them.
+
+function TaskDetailDialog({
+  item,
+  onClose,
+  onToggle,
+  onDelete,
+}: {
+  item: DayTaskItem;
+  onClose: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  if (item.kind === "project") {
+    const task = item.data;
+    return (
+      <Dialog open onOpenChange={(open) => !open && onClose()}>
+        <DialogContent className="max-w-md border-[#E2DFD6] rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display tracking-tight flex items-start gap-2">
+              <Briefcase className="h-5 w-5 shrink-0 mt-0.5 text-[#0E8A7D]/70" />
+              <span>{task.taskName || "Untitled task"}</span>
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center gap-2 text-[11px] text-[#0E8A7D] bg-[#0E8A7D]/[0.06] rounded-md px-2 py-1.5">
+              <Lock className="h-3 w-3 shrink-0" />
+              <span>From the Tasks page — view only here. Edit or complete it on the Tasks page.</span>
+            </div>
+            {task.projectTitle && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Briefcase className="h-3.5 w-3.5 shrink-0" />
+                <span>{task.projectTitle}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                {task.startDate ? format(parseISO(task.startDate), "MMM d") : "—"}
+                {" – "}
+                {task.endDate ? format(parseISO(task.endDate), "MMM d, yyyy") : "—"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {task.priority && (
+                <Badge variant="secondary" className="text-[10px] capitalize">
+                  {task.priority} priority
+                </Badge>
+              )}
+              <Badge variant="outline" className="text-[10px] border-[#E2DFD6] capitalize">
+                {task.status || "Pending"}
+              </Badge>
+            </div>
+            {task.description && (
+              <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed pt-1 border-t border-[#E2DFD6]">
+                {task.description}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="mt-2">
+            <Button variant="outline" className="border-[#E2DFD6]" onClick={onClose}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Calendar-only task — fully editable.
+  const task = item.data;
+  const done = task.done;
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md border-[#E2DFD6] rounded-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-display tracking-tight flex items-start gap-2">
+            <button
+              type="button"
+              onClick={onToggle}
+              className="shrink-0 mt-0.5 text-[#0E8A7D]/80 hover:text-[#0E8A7D]"
+              title={done ? "Mark task incomplete" : "Mark task complete"}
+            >
+              {done ? <CheckSquare2 className="h-5 w-5" /> : <Square className="h-5 w-5" />}
+            </button>
+            <span className={cn(done && "line-through text-muted-foreground")}>
+              {task.title || "Untitled task"}
+            </span>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3 text-sm">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              {format(parseISO(task.date), "EEEE, MMM d, yyyy")}
+              {!task.allDay && task.startTime && (
+                <>
+                  {" · "}
+                  {task.startTime}
+                  {task.endTime ? `–${task.endTime}` : ""}
+                </>
+              )}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <Lock className="h-3 w-3 shrink-0" /> Only me · calendar task (not on the Tasks page)
+          </div>
+          {task.notes && (
+            <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed pt-1 border-t border-[#E2DFD6]">
+              {task.notes}
+            </p>
+          )}
+        </div>
+
+        <DialogFooter className="mt-2 sm:justify-between">
+          <Button variant="ghost" className="text-destructive gap-1.5 justify-self-start" onClick={onDelete}>
+            <Trash2 className="h-4 w-4" /> Delete task
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" className="border-[#E2DFD6]" onClick={onClose}>
+              Close
+            </Button>
+            <Button className="bg-[#3C5A73] hover:bg-[#33506A] text-white" onClick={onToggle}>
+              {done ? "Mark incomplete" : "Mark completed"}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Quick-add task dialog ──────────────────────────────────────────────────
+// A lightweight "Add task" flow in the spirit of Google Calendar's Tasks
+// quick-add. This is entirely local to the calendar — it never calls
+// /api/tasks, so it can never create, edit, or otherwise affect anything on
+// the real Tasks page. Saved tasks live only in this browser's calendar
+// task store (see loadCalendarTasks/persistCalendarTasks).
+
+function QuickAddTaskDialog({
+  date,
+  onClose,
+  onCreated,
+}: {
+  date: string;
+  onClose: () => void;
+  onCreated: (task: CalendarTask) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [taskDate, setTaskDate] = useState(date);
+  const [allDay, setAllDay] = useState(true);
+  const [startTime, setStartTime] = useState("09:00");
+  const [endTime, setEndTime] = useState("10:00");
+  const [notes, setNotes] = useState("");
+
+  const handleCreate = () => {
+    if (!title.trim()) return;
+    onCreated({
+      id: uid(),
+      title: title.trim(),
+      date: taskDate,
+      startTime: allDay ? "" : startTime,
+      endTime: allDay ? "" : endTime,
+      allDay,
+      notes: notes.trim(),
+      done: false,
+      createdAt: new Date().toISOString(),
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md border-[#E2DFD6] rounded-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-display tracking-tight flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-[#0E8A7D]" /> Add task
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div>
+            <Label className="text-[11px] text-muted-foreground">TITLE</Label>
+            <Input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Send client update"
+              className="h-9 text-sm mt-1"
+              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-[11px] text-muted-foreground">DATE</Label>
+              <Input
+                type="date"
+                value={taskDate}
+                onChange={(e) => setTaskDate(e.target.value)}
+                className="h-9 text-sm mt-1"
+              />
+            </div>
+            <div className="flex items-end pb-1.5">
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <Checkbox checked={allDay} onCheckedChange={(v) => setAllDay(Boolean(v))} />
+                All day
+              </label>
+            </div>
+          </div>
+
+          {!allDay && (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-[11px] text-muted-foreground">START TIME</Label>
+                <Input
+                  type="time"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                  className="h-9 text-sm mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-[11px] text-muted-foreground">END TIME</Label>
+                <Input
+                  type="time"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                  className="h-9 text-sm mt-1"
+                />
+              </div>
+            </div>
+          )}
+
+          <div>
+            <Label className="text-[11px] text-muted-foreground">DESCRIPTION</Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Add a description (optional)"
+              className="text-sm mt-1 min-h-[64px]"
+            />
+          </div>
+
+          <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+            <Lock className="h-3 w-3" /> Calendar task — separate from the Tasks page, visible only to you.
+          </p>
+        </div>
+
+        <DialogFooter className="mt-2">
+          <Button variant="outline" className="border-[#E2DFD6]" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleCreate}
+            disabled={!title.trim()}
+            className="bg-[#3C5A73] hover:bg-[#33506A] text-white"
+          >
+            Add task
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

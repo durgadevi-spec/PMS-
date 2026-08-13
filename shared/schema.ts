@@ -287,6 +287,35 @@ export const taskTags = pgTable("task_tags", {
 ]);
 
 /* ===============================
+   TASK TEMPLATES
+   Saved presets of the fields that tend to repeat across similar tasks
+   (Project, Key Step, Assigned By, Task Owner, Assignees, Tags, Priority,
+   Task Period, Reminder Frequency) so Add Task can be pre-filled from one
+   instead of re-picking the same dropdowns every time.
+================================ */
+export const taskTemplates = pgTable("task_templates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+
+  projectId: uuid("project_id"),
+  keyStepId: uuid("key_step_id"),
+  assignerId: uuid("assigner_id"),
+  taskOwnerId: uuid("task_owner_id"),
+  taskMembers: jsonb("task_members").$type<string[]>().default([]),
+  tagIds: jsonb("tag_ids").$type<string[]>().default([]),
+
+  priority: text("priority").default("medium"),
+  taskPeriod: text("task_period").default("custom"),
+  reminderFrequency: text("reminder_frequency").default("1 Time"),
+
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_task_templates_project_id").on(table.projectId),
+  index("idx_task_templates_created_by").on(table.createdBy),
+]);
+
+/* ===============================
    SUBTASKS
 ================================ */
 export const subtasks = pgTable("subtasks", {

@@ -509,6 +509,87 @@ export default function AddEditTask() {
     }
   };
 
+  // Task Templates: reusable presets of the fields that repeat across
+  // similar tasks (Project, Key Step, Assigned By, Task Owner, Assignees,
+  // Tags, Priority, Task Period, Reminder Frequency).
+  const [taskTemplates, setTaskTemplates] = useState<any[]>([]);
+  const [templateDropdownOpen, setTemplateDropdownOpen] = useState(false);
+  const [saveTemplateDialogOpen, setSaveTemplateDialogOpen] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  useEffect(() => {
+    apiFetch("/api/task-templates")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setTaskTemplates(Array.isArray(data) ? data : []))
+      .catch(() => setTaskTemplates([]));
+  }, []);
+
+  const applyTemplate = (template: any) => {
+    setForm((f) => ({
+      ...f,
+      projectId: template.projectId ? String(template.projectId) : f.projectId,
+      keyStepId: template.keyStepId ? String(template.keyStepId) : "",
+      assignerId: template.assignerId ? String(template.assignerId) : f.assignerId,
+      taskOwnerId: template.taskOwnerId ? String(template.taskOwnerId) : f.taskOwnerId,
+      taskMembers: Array.isArray(template.taskMembers) ? template.taskMembers.map(String) : [],
+      tagIds: Array.isArray(template.tagIds) ? template.tagIds.map(String) : [],
+      priority: template.priority || f.priority,
+      taskPeriod: template.taskPeriod || f.taskPeriod,
+      reminderFrequency: template.reminderFrequency || f.reminderFrequency,
+    }));
+    setTemplateDropdownOpen(false);
+    toast({ title: `Loaded template "${template.name}"` });
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!newTemplateName.trim()) return;
+    if (!form.projectId) {
+      toast({ variant: "destructive", title: "Pick a Project before saving a template" });
+      return;
+    }
+    setSavingTemplate(true);
+    try {
+      const res = await apiFetch("/api/task-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newTemplateName.trim(),
+          projectId: form.projectId,
+          keyStepId: form.keyStepId || null,
+          assignerId: form.assignerId || null,
+          taskOwnerId: form.taskOwnerId || null,
+          taskMembers: form.taskMembers,
+          tagIds: form.tagIds,
+          priority: form.priority,
+          taskPeriod: form.taskPeriod,
+          reminderFrequency: form.reminderFrequency,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save template");
+      const newTemplate = await res.json();
+      setTaskTemplates((prev) => [newTemplate, ...prev]);
+      setNewTemplateName("");
+      setSaveTemplateDialogOpen(false);
+      toast({ title: "Template saved", description: `"${newTemplate.name}" is ready to reuse.` });
+    } catch (err) {
+      toast({ variant: "destructive", title: "Failed to save template" });
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+    try {
+      const res = await apiFetch(`/api/task-templates/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete template");
+      setTaskTemplates((prev) => prev.filter((t) => t.id !== id));
+      toast({ title: "Template deleted" });
+    } catch (err) {
+      toast({ variant: "destructive", title: "Failed to delete template" });
+    }
+  };
+
   // Reset only the per-task fields to draft a new task — Project,
   // Assigned By, Task Owner, Assignees and Key Step stay as-is since the
   // user is typically adding several tasks for the same project/person.
@@ -756,6 +837,72 @@ export default function AddEditTask() {
 
           {/* Form */}
           <div className="bg-white rounded-lg border p-8 space-y-6">
+            {/* Task Templates toolbar — only relevant when creating tasks */}
+            {!taskId && (
+              <div className="flex items-center justify-between gap-3 pb-2 -mt-2">
+                <Popover open={templateDropdownOpen} onOpenChange={setTemplateDropdownOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-9 font-normal">
+                      Load Template
+                      <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[320px] p-0" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                    <Command>
+                      <CommandInput placeholder="Search templates..." />
+                      <CommandList className="max-h-72">
+                        <CommandEmpty>
+                          {taskTemplates.length === 0 ? "No templates saved yet." : "No template found."}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {taskTemplates.map((tpl) => {
+                            const tplProject = projects.find((p) => String(p.id) === String(tpl.projectId));
+                            return (
+                              <CommandItem
+                                key={tpl.id}
+                                value={tpl.name}
+                                onSelect={() => applyTemplate(tpl)}
+                                className="flex items-center justify-between gap-2"
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium truncate">{tpl.name}</div>
+                                  {tplProject && (
+                                    <div className="text-xs text-slate-400 truncate">{tplProject.title}</div>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  title="Delete template"
+                                  className="text-slate-300 hover:text-red-500 shrink-0"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteTemplate(tpl.id);
+                                  }}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </CommandItem>
+                            );
+                          })}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 font-normal"
+                  onClick={() => setSaveTemplateDialogOpen(true)}
+                  disabled={!form.projectId}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" />
+                  Save as Template
+                </Button>
+              </div>
+            )}
+
             {/* Row 1: Project & Department */}
             <div className="grid grid-cols-2 gap-6">
               <div>
@@ -1378,6 +1525,40 @@ export default function AddEditTask() {
           Show Tasks ({sessionTasks.length})
         </button>
       )}
+
+      {/* Save as Template Dialog */}
+      <Dialog open={saveTemplateDialogOpen} onOpenChange={setSaveTemplateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save as Template</DialogTitle>
+            <DialogDescription>
+              Saves Project, Key Step, Assigned By, Task Owner, Assignees, Tags, Priority,
+              Task Period and Reminder Frequency — not the Task Name or dates, since those
+              change per task.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label className="text-sm font-semibold mb-2 block">Template Name</Label>
+            <Input
+              value={newTemplateName}
+              onChange={(e) => setNewTemplateName(e.target.value)}
+              placeholder="e.g. BOQ Refinement Task"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveTemplate();
+              }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveTemplateDialogOpen(false)} disabled={savingTemplate}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveTemplate} disabled={savingTemplate || !newTemplateName.trim()}>
+              {savingTemplate ? "Saving..." : "Save Template"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

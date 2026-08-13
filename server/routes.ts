@@ -66,6 +66,7 @@ import {
   tags,
   taskTags,
   subtaskTags,
+  taskTemplates,
   calendarEvents,
   taskDependencies,
   taskScheduleHistory,
@@ -5803,6 +5804,81 @@ export async function registerRoutes(
     } catch (err) {
       console.error("[TAGS] DELETE /api/tags/:id error:", err);
       res.status(500).json({ error: "Failed to delete tag" });
+    }
+  });
+
+  /* ===============================
+      TASK TEMPLATES
+      Saved presets of the fields that repeat across similar tasks
+      (Project, Key Step, Assigned By, Task Owner, Assignees, Tags,
+      Priority, Task Period, Reminder Frequency) so Add Task can be
+      pre-filled from one instead of re-picking the same dropdowns
+      every time.
+  ================================ */
+  app.get("/api/task-templates", requireAuth, async (req: any, res) => {
+    try {
+      const templates = await db.select().from(taskTemplates).orderBy(desc(taskTemplates.createdAt));
+      res.json(templates);
+    } catch (err) {
+      console.error("[TASK TEMPLATES] GET /api/task-templates error:", err);
+      res.status(500).json({ error: "Failed to fetch task templates" });
+    }
+  });
+
+  app.post("/api/task-templates", requireAuth, async (req: any, res) => {
+    try {
+      const {
+        name,
+        projectId,
+        keyStepId,
+        assignerId,
+        taskOwnerId,
+        taskMembers: memberList = [],
+        tagIds = [],
+        priority,
+        taskPeriod,
+        reminderFrequency,
+      } = req.body;
+
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: "Template name is required" });
+      }
+      if (!projectId) {
+        return res.status(400).json({ error: "Project is required" });
+      }
+
+      const [template] = await db
+        .insert(taskTemplates)
+        .values({
+          name: String(name).trim(),
+          projectId,
+          keyStepId: keyStepId || null,
+          assignerId: assignerId || null,
+          taskOwnerId: taskOwnerId || null,
+          taskMembers: Array.isArray(memberList) ? memberList : [],
+          tagIds: Array.isArray(tagIds) ? tagIds : [],
+          priority: priority || "medium",
+          taskPeriod: taskPeriod || "custom",
+          reminderFrequency: reminderFrequency || "1 Time",
+          createdBy: req.employee?.id || null,
+        })
+        .returning();
+
+      res.status(201).json(template);
+    } catch (err) {
+      console.error("[TASK TEMPLATES] POST /api/task-templates error:", err);
+      res.status(500).json({ error: "Failed to create task template" });
+    }
+  });
+
+  app.delete("/api/task-templates/:id", requireAuth, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      await db.delete(taskTemplates).where(eq(taskTemplates.id, id));
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[TASK TEMPLATES] DELETE /api/task-templates/:id error:", err);
+      res.status(500).json({ error: "Failed to delete task template" });
     }
   });
 
