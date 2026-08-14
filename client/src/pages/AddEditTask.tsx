@@ -1445,7 +1445,7 @@ export default function AddEditTask() {
                   onClick={() => navigate("/tasks")}
                   disabled={loading || deleting}
                 >
-                  {sessionTasks.length > 0 ? "Done" : "Cancel"}
+                  Cancel
                 </Button>
                 {!taskId && (
                   <Button
