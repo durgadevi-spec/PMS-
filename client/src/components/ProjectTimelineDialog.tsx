@@ -481,7 +481,9 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
                         {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
                     </Button>
                     {project?.id && (
-                        <ProjectScheduleHistoryDialog projectId={project.id} projectTitle={project?.title} />
+                        <div className="mr-8 shrink-0">
+                            <ProjectScheduleHistoryDialog projectId={project.id} projectTitle={project?.title} />
+                        </div>
                     )}
                 </DialogHeader>
 
@@ -666,7 +668,7 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
                                                             <span className={cn("text-xs truncate", row.level === "project" ? "font-bold" : row.level === "keystep" ? "font-semibold" : "font-medium")} title={row.title}>
                                                                 {row.title}
                                                             </span>
-                                                            {isMilestone && <span title="Milestone" className="inline-flex shrink-0"><Flag className="h-3 w-3 text-amber-500" /></span>}
+                                                            {isMilestone && <span title="Checkpoint" className="inline-flex shrink-0"><Flag className="h-3 w-3 text-amber-500" /></span>}
                                                         </div>
 
                                                         {row.level !== "project" && (
@@ -776,7 +778,7 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
                                                         <span className="w-3.5 shrink-0" />
                                                     )}
                                                     <span className="truncate" title={row.title}>{row.title}</span>
-                                                    {start && end && dayDiff(end, start) === 0 && <span title="Milestone" className="inline-flex shrink-0"><Flag className="h-3 w-3 text-amber-500" /></span>}
+                                                    {start && end && dayDiff(end, start) === 0 && <span title="Checkpoint" className="inline-flex shrink-0"><Flag className="h-3 w-3 text-amber-500" /></span>}
                                                 </div>
                                                 <div className="w-24 px-2 py-2 shrink-0">
                                                     <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 uppercase font-bold">{levelLabel(row.level)}</Badge>

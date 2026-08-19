@@ -43,6 +43,7 @@ export default function ProjectScheduleHistoryDialog({ projectId, projectTitle }
     const [loading, setLoading] = useState(false);
     const [entries, setEntries] = useState<any[]>([]);
     const [taskFilter, setTaskFilter] = useState<string>("all");
+    const [taskSearch, setTaskSearch] = useState("");
     const [typeFilter, setTypeFilter] = useState<string>("all");
     const [exportColSelOpen, setExportColSelOpen] = useState(false);
     const [selectedExportCols, setSelectedExportCols] = useState<string[]>(
@@ -73,6 +74,9 @@ export default function ProjectScheduleHistoryDialog({ projectId, projectTitle }
 
     const taskOptions = Array.from(
         new Map(entries.map((e) => [e.taskId, e.taskName || "Unknown task"])).entries()
+    );
+    const filteredTaskOptions = taskOptions.filter(([, name]) =>
+        name.toLowerCase().includes(taskSearch.trim().toLowerCase())
     );
 
     const handleDownloadPdf = () => {
@@ -167,13 +171,30 @@ export default function ProjectScheduleHistoryDialog({ projectId, projectTitle }
                     </DialogHeader>
 
                     <div className="flex gap-2">
-                        <Select value={taskFilter} onValueChange={setTaskFilter}>
+                        <Select
+                            value={taskFilter}
+                            onValueChange={(value) => {
+                                setTaskFilter(value);
+                                setTaskSearch("");
+                            }}
+                        >
                             <SelectTrigger className="h-8 text-xs w-[200px]">
                                 <SelectValue placeholder="Filter by task" />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="max-h-[200px] [&_[data-radix-select-viewport]]:h-auto [&_[data-radix-select-viewport]]:max-h-[200px]">
+                                <div className="sticky top-0 z-10 bg-popover p-1">
+                                    <input
+                                        value={taskSearch}
+                                        onChange={(e) => setTaskSearch(e.target.value)}
+                                        onKeyDown={(e) => e.stopPropagation()}
+                                        onPointerDown={(e) => e.stopPropagation()}
+                                        placeholder="Search tasks..."
+                                        aria-label="Search tasks"
+                                        className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs outline-none placeholder:text-slate-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                                    />
+                                </div>
                                 <SelectItem value="all">All Tasks</SelectItem>
-                                {taskOptions.map(([id, name]) => (
+                                {filteredTaskOptions.map(([id, name]) => (
                                     <SelectItem key={id} value={id}>
                                         {name}
                                     </SelectItem>

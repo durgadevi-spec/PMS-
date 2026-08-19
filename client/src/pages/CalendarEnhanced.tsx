@@ -86,7 +86,8 @@ import { cn } from "@/lib/utils";
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 type ViewMode = "day" | "week" | "month";
-type RepeatRule = "none" | "daily" | "weekly" | "monthly" | "yearly";
+type RepeatRule = "none" | "daily" | "weekly" | "monthly" | "yearly" | "custom";
+type CustomRepeatUnit = "daily" | "weekly" | "monthly" | "yearly";
 
 interface Guest {
   id: string;
@@ -125,6 +126,8 @@ interface CalendarEvent {
   taskId: string;
   taskTitle: string;
   repeat: RepeatRule;
+  customRepeatInterval?: number;
+  customRepeatUnit?: CustomRepeatUnit;
   repeatUntil: string | null; // yyyy-MM-dd; null = repeats indefinitely
   reminders: number[];
   visibility: "default" | "public" | "private";
@@ -270,6 +273,7 @@ const REPEAT_OPTIONS: { value: RepeatRule; label: string }[] = [
   { value: "weekly", label: "Weekly" },
   { value: "monthly", label: "Monthly" },
   { value: "yearly", label: "Yearly" },
+  { value: "custom", label: "Custom" },
 ];
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -387,6 +391,8 @@ const blankDraft = (overrides: Partial<CalendarEvent> = {}): CalendarEvent => {
     taskId: "",
     taskTitle: "",
     repeat: "none",
+    customRepeatInterval: 1,
+    customRepeatUnit: "weekly",
     repeatUntil: null,
     reminders: [30],
     visibility: "default",
@@ -399,6 +405,20 @@ const blankDraft = (overrides: Partial<CalendarEvent> = {}): CalendarEvent => {
 // Expand recurring events into visible occurrences within [rangeStart, rangeEnd]
 function expandOccurrences(events: CalendarEvent[], rangeStart: Date, rangeEnd: Date): Occurrence[] {
   const out: Occurrence[] = [];
+
+  const advance = (date: Date, event: CalendarEvent) => {
+    const interval = Math.max(1, event.customRepeatInterval || 1);
+    if (event.repeat === "custom") {
+      if (event.customRepeatUnit === "daily") return addDays(date, interval);
+      if (event.customRepeatUnit === "monthly") return addMonths(date, interval);
+      if (event.customRepeatUnit === "yearly") return addYears(date, interval);
+      return addDays(date, interval * 7);
+    }
+    if (event.repeat === "daily") return addDays(date, 1);
+    if (event.repeat === "weekly") return addDays(date, 7);
+    if (event.repeat === "monthly") return addMonths(date, 1);
+    return addYears(date, 1);
+  };
 
   events.forEach((evt) => {
     if (!evt.repeat || evt.repeat === "none") {
@@ -428,6 +448,8 @@ function expandOccurrences(events: CalendarEvent[], rangeStart: Date, rangeEnd: 
         const yearsSince = rangeStart.getFullYear() - originalStart.getFullYear();
         cursor = addYears(originalStart, Math.max(0, yearsSince - 1));
         while (cursor < rangeStart) cursor = addYears(cursor, 1);
+      } else if (evt.repeat === "custom") {
+        while (cursor < rangeStart) cursor = advance(cursor, evt);
       }
     }
 
@@ -445,10 +467,7 @@ function expandOccurrences(events: CalendarEvent[], rangeStart: Date, rangeEnd: 
         });
       }
       count++;
-      if (evt.repeat === "daily") cursor = addDays(cursor, 1);
-      else if (evt.repeat === "weekly") cursor = addDays(cursor, 7);
-      else if (evt.repeat === "monthly") cursor = addMonths(cursor, 1);
-      else cursor = addYears(cursor, 1);
+      cursor = advance(cursor, evt);
     }
   });
 
@@ -526,7 +545,10 @@ function buildICS(events: CalendarEvent[]): string {
       if (g.email) lines.push(`ATTENDEE;CN=${escapeICS(g.name || g.email)}:mailto:${g.email}`);
     });
     if (evt.repeat !== "none") {
-      let rrule = `RRULE:FREQ=${freqMap[evt.repeat]}`;
+      const customUnit = evt.customRepeatUnit || "weekly";
+      const frequency = evt.repeat === "custom" ? freqMap[customUnit] : freqMap[evt.repeat];
+      const interval = evt.repeat === "custom" ? Math.max(1, evt.customRepeatInterval || 1) : 1;
+      let rrule = `RRULE:FREQ=${frequency}${interval > 1 ? `;INTERVAL=${interval}` : ""}`;
       if (evt.repeatUntil) rrule += `;UNTIL=${toICSDate(evt.repeatUntil)}`;
       lines.push(rrule);
     }
@@ -3046,9 +3068,14 @@ function EventFormDialog({
             <Label className="text-xs text-muted-foreground w-16 shrink-0">Repeat</Label>
             <Select
               value={form.repeat}
-              onValueChange={(v) =>
-                update({ repeat: v as RepeatRule, ...(v === "none" ? { repeatUntil: null } : {}) })
-              }
+              onValueChange={(v) => update({
+                repeat: v as RepeatRule,
+                ...(v === "none" ? { repeatUntil: null } : {}),
+                ...(v === "custom" ? {
+                  customRepeatInterval: Math.max(1, form.customRepeatInterval || 1),
+                  customRepeatUnit: form.customRepeatUnit || "weekly",
+                } : {}),
+              })}
             >
               <SelectTrigger className="h-8 w-48 text-xs">
                 <SelectValue />
@@ -3062,6 +3089,33 @@ function EventFormDialog({
               </SelectContent>
             </Select>
           </div>
+          {form.repeat === "custom" && (
+            <div className="flex items-center gap-2 -mt-1">
+              <Label className="text-xs text-muted-foreground w-16 shrink-0">Every</Label>
+              <Input
+                type="number"
+                min={1}
+                max={99}
+                value={form.customRepeatInterval || 1}
+                onChange={(e) => update({ customRepeatInterval: Math.max(1, Math.min(99, Number(e.target.value) || 1)) })}
+                className="h-8 w-16 text-xs"
+              />
+              <Select
+                value={form.customRepeatUnit || "weekly"}
+                onValueChange={(v) => update({ customRepeatUnit: v as CustomRepeatUnit })}
+              >
+                <SelectTrigger className="h-8 w-28 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">day(s)</SelectItem>
+                  <SelectItem value="weekly">week(s)</SelectItem>
+                  <SelectItem value="monthly">month(s)</SelectItem>
+                  <SelectItem value="yearly">year(s)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {form.repeat !== "none" && (
             <div className="flex items-center gap-2 -mt-1">
               <Label className="text-xs text-muted-foreground w-16 shrink-0">Ends</Label>

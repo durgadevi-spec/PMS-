@@ -1477,30 +1477,42 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     startDate: 95, endDate: 95, completionDate: 110, durationDays: 90,
     priority: 90, status: 110, progress: 120, remarks: 90, flags: 100,
   };
-  const [colWidths, setColWidths] = useState<Record<string, number>>({});
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem("tasks_columnWidths_v1");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
   const colResizeRef = useRef<{ colId: string; startX: number; startWidth: number } | null>(null);
-  const colResizeRaf = useRef<number | null>(null);
+  useEffect(() => {
+    localStorage.setItem("tasks_columnWidths_v1", JSON.stringify(colWidths));
+  }, [colWidths]);
   const getColWidth = (colId: string) => colWidths[colId] ?? DEFAULT_COL_WIDTHS[colId] ?? 120;
+  const visibleResizableColumns = columnsConfig.filter(c => c.visible && c.id !== 'serial');
+  const tableWidth = 40 + 24 + 32 + 32 + 100 + visibleResizableColumns.reduce(
+    (total, column) => total + getColWidth(column.id),
+    0,
+  );
+
   const handleColResizeStart = (e: React.MouseEvent, colId: string) => {
     e.preventDefault();
     e.stopPropagation();
     colResizeRef.current = { colId, startX: e.clientX, startWidth: getColWidth(colId) };
+    let latestWidth = colResizeRef.current.startWidth;
     const onMove = (moveEvent: MouseEvent) => {
       if (!colResizeRef.current) return;
-      if (colResizeRaf.current) cancelAnimationFrame(colResizeRaf.current);
-      colResizeRaf.current = requestAnimationFrame(() => {
-        if (!colResizeRef.current) return;
-        const { colId, startX, startWidth } = colResizeRef.current;
-        const delta = moveEvent.clientX - startX;
-        const newWidth = Math.min(800, Math.max(60, startWidth + delta));
-        setColWidths(prev => (prev[colId] === newWidth ? prev : { ...prev, [colId]: newWidth }));
-      });
+      const { startX, startWidth } = colResizeRef.current;
+      const delta = moveEvent.clientX - startX;
+      latestWidth = Math.min(800, Math.max(60, startWidth + delta));
+      setColWidths(prev => ({ ...prev, [colId]: latestWidth }));
     };
     const onUp = () => {
       colResizeRef.current = null;
-      if (colResizeRaf.current) cancelAnimationFrame(colResizeRaf.current);
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      setColWidths(prev => ({ ...prev, [colId]: latestWidth }));
     };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -5090,14 +5102,14 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       )}
       {/* MAIN TABLE CONTAINER */}
       <div ref={tableScrollRef} className="bg-white border border-slate-200 rounded-xl overflow-x-auto shadow-sm max-h-[calc(100vh-220px)] custom-scrollbar relative">
-        <table className="border-collapse table-fixed text-xs">
+        <table className="w-max border-collapse table-fixed text-xs" style={{ width: tableWidth, minWidth: tableWidth }}>
           <colgroup>
             <col style={{ width: 40 }} />
             <col style={{ width: 24 }} />
             <col style={{ width: 32 }} />
             <col style={{ width: 32 }} />
-            {columnsConfig.filter(c => c.visible && c.id !== 'serial').map(col => (
-              <col key={col.id} style={{ width: getColWidth(col.id) }} />
+            {visibleResizableColumns.map(col => (
+              <col key={col.id} data-resize-col={col.id} style={{ width: getColWidth(col.id) }} />
             ))}
             <col style={{ width: 100 }} />
           </colgroup>
@@ -5135,15 +5147,15 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                 };
 
                 const thClass = cn(
-                  "px-3 py-2.5 text-left align-middle text-[10px] font-bold uppercase tracking-wider text-slate-500 border-r border-slate-200 whitespace-nowrap select-none transition-colors relative overflow-visible",
+                  "px-3 py-2.5 min-w-0 text-left align-middle text-[10px] font-bold uppercase tracking-wider text-slate-500 border-r border-slate-200 select-none transition-colors relative overflow-visible",
                   isSortable && "cursor-pointer hover:bg-slate-100/70 hover:text-slate-700",
                   isActiveSort && "bg-slate-100/60 text-slate-700"
                 );
 
                 const renderHeader = (label: string) => (
-                  <th key={col.id} className={thClass} style={{ width: getColWidth(col.id) }} onClick={handleSort}>
-                    <div className="flex items-center gap-1.5">
-                      <span>{label}</span>
+                  <th key={col.id} data-resize-col={col.id} className={thClass} style={{ width: getColWidth(col.id), minWidth: 0 }} onClick={handleSort}>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="min-w-0 flex-1 truncate" title={label}>{label}</span>
                       {isSortable && (
                         <span className={cn("flex items-center shrink-0", isActiveSort ? "text-slate-600" : "text-slate-350")}>
                           {isActiveSort ? (sortConfig.direction === 'asc' ? <ArrowUp size={10} /> : <ArrowDown size={10} />) : <ArrowUpDown size={10} />}

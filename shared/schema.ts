@@ -822,6 +822,8 @@ export const calendarEvents = pgTable("calendar_events", {
   taskTitle: text("task_title"),
 
   repeat: text("repeat").notNull().default('none'),
+  customRepeatInterval: integer("custom_repeat_interval").default(1),
+  customRepeatUnit: text("custom_repeat_unit").default('weekly'),
   repeatUntil: text("repeat_until"), // yyyy-MM-dd; null = repeats indefinitely
   reminders: jsonb("reminders").default([]),
 
