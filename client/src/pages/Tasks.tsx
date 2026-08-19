@@ -1490,8 +1490,9 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     localStorage.setItem("tasks_columnWidths_v1", JSON.stringify(colWidths));
   }, [colWidths]);
   const getColWidth = (colId: string) => colWidths[colId] ?? DEFAULT_COL_WIDTHS[colId] ?? 120;
+  const MANAGE_COL_WIDTH = 210;
   const visibleResizableColumns = columnsConfig.filter(c => c.visible && c.id !== 'serial');
-  const tableWidth = 40 + 24 + 32 + 32 + 100 + visibleResizableColumns.reduce(
+  const tableWidth = 40 + 24 + 32 + 32 + MANAGE_COL_WIDTH + visibleResizableColumns.reduce(
     (total, column) => total + getColWidth(column.id),
     0,
   );
@@ -5111,7 +5112,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
             {visibleResizableColumns.map(col => (
               <col key={col.id} data-resize-col={col.id} style={{ width: getColWidth(col.id) }} />
             ))}
-            <col style={{ width: 100 }} />
+            <col style={{ width: MANAGE_COL_WIDTH }} />
           </colgroup>
 
           {/* Sticky Table Header */}
@@ -5196,7 +5197,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                   default: return null;
                 }
               })}
-              <th className="px-2 py-2.5 align-middle text-center text-[10px] font-bold uppercase tracking-wider text-slate-500 min-w-[100px]">
+              <th className="w-[210px] min-w-[210px] max-w-[210px] px-2 py-2.5 align-middle text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">
                 Manage
               </th>
             </tr>
@@ -6035,7 +6036,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                               }
                             })}
                             {/* Actions Column */}
-                            <td className="px-2 py-1 text-center">
+                            <td className="w-[210px] min-w-[210px] max-w-[210px] px-2 py-1 text-center">
                               <div className="flex items-center justify-center gap-0.5">
                                 {/* Move Task Up / Down: reorders within the current group using
                                     the same executeReorder logic that powers drag-and-drop. */}
@@ -6879,7 +6880,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                       }
                                     })}
                                     {/* Subtask actions (delete/clone) */}
-                                    <td className="px-2 py-0.5 text-center">
+                                    <td className="w-[210px] min-w-[210px] max-w-[210px] px-2 py-0.5 text-center">
                                       <div className="flex items-center justify-center gap-1">
                                         <Button
                                           size="icon"
@@ -6977,7 +6978,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                     default: return null;
                                   }
                                 })}
-                                <td className="px-2 py-0.5 text-center">
+                                <td className="w-[210px] min-w-[210px] max-w-[210px] px-2 py-0.5 text-center">
                                   <Button
                                     size="sm"
                                     variant="ghost"
