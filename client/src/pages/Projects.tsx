@@ -243,7 +243,8 @@ export default function Projects() {
     status: "Planned",
     holdReason: "",
     team: [] as string[],
-    vendors: [] as string[]
+    vendors: [] as string[],
+    restrictToTeam: false,
   });
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [uploadingProject, setUploadingProject] = useState<string | null>(null);
@@ -392,14 +393,18 @@ export default function Projects() {
       if (!empRes.ok) {
         console.error("Failed to fetch employees:", empRes.status);
         setEmployees([]);
+        return [];
       } else {
         const empData = await empRes.json();
         console.log("Loaded employees:", empData);
-        setEmployees(Array.isArray(empData) ? empData : []);
+        const list = Array.isArray(empData) ? empData : [];
+        setEmployees(list);
+        return list;
       }
     } catch (err) {
       console.error("Error fetching employees:", err);
       setEmployees([]);
+      return [];
     }
   };
 
@@ -705,7 +710,13 @@ export default function Projects() {
       status: "Planned",
       holdReason: "",
       team: [],
-      vendors: []
+      vendors: [],
+      // New projects default to team-restricted access: once a department
+      // is picked, its members are auto-added to the team list below, and
+      // removing someone from that list actually keeps them out. Admin can
+      // still uncheck "Restrict access..." to fall back to classic
+      // whole-department visibility for this project if they want that.
+      restrictToTeam: true,
     });
     setTeamMemberSearch("");
     // Refresh employees before opening dialog
@@ -739,10 +750,13 @@ export default function Projects() {
     setModalMode("edit");
     setEditingId(project.id);
 
+    const existingDepartments = project.department ?? [];
+    const existingTeam = project.team || [];
+
     setFormProject({
       title: project.title,
       projectCode: project.projectCode || "",
-      department: project.department ?? [],
+      department: existingDepartments,
       clientName: project.clientName || "",
       description: project.description || "",
       company: project.company || "",
@@ -751,13 +765,45 @@ export default function Projects() {
       progress: project.progress || 0,
       status: project.status || "Planned",
       holdReason: project.holdReason || "",
-      team: project.team || [],
+      team: existingTeam,
       vendors: project.vendors || [],
+      // Reflect exactly what's saved for this project. Every project that
+      // existed before this feature defaults to false here (whole
+      // department keeps seeing it, unchanged) — this only becomes true if
+      // an admin explicitly turned it on for this project before.
+      restrictToTeam: Boolean(project.restrictToTeam),
     });
 
     setTeamMemberSearch("");
     // Refresh employees before opening dialog
-    fetchEmployees().then(() => {
+    fetchEmployees().then((freshEmployees) => {
+      // Existing/legacy projects: a department is selected but no explicit
+      // team members were ever saved (it has always relied on whole-
+      // department visibility). Auto-select that department's members into
+      // the team list here too, so opening ANY existing department-only
+      // project lets the admin remove specific people from it, exactly like
+      // a brand-new project. If the project already has explicit team
+      // members saved, this is skipped entirely — we never override a list
+      // that's already been customized (respects any previous removals).
+      if (existingDepartments.length > 0 && existingTeam.length === 0) {
+        const deptNorms = existingDepartments.map((d: string) => normalizeDept(d));
+        const deptMemberIds = (freshEmployees || [])
+          .filter((emp: any) => {
+            if (!emp.department) return false;
+            const empDepts = Array.isArray(emp.department)
+              ? emp.department.map((d: string) => normalizeDept(d))
+              : [normalizeDept(emp.department)];
+            return empDepts.some((d: string) => deptNorms.includes(d));
+          })
+          .map((emp: any) => emp.id);
+
+        if (deptMemberIds.length > 0) {
+          setFormProject((prev) => ({
+            ...prev,
+            team: Array.from(new Set([...prev.team, ...deptMemberIds])),
+          }));
+        }
+      }
       setOpenDialog(true);
     });
   };
@@ -844,6 +890,7 @@ export default function Projects() {
         progress: Number(formProject.progress) || 0,
         team: formProject.team || [],
         vendors: formProject.vendors || [],
+        restrictToTeam: Boolean(formProject.restrictToTeam),
       };
 
       let response;
@@ -899,6 +946,7 @@ export default function Projects() {
         holdReason: "",
         team: [],
         vendors: [],
+        restrictToTeam: true,
       });
       setVendorInput("");
       setTeamMemberSearch("");
@@ -1354,12 +1402,38 @@ export default function Projects() {
                                 const deptNorm = normalizeDept(dept);
                                 const isCurrentlyChecked = formProject.department.some(d => normalizeDept(d) === deptNorm);
 
-                                setFormProject((prev) => ({
-                                  ...prev,
-                                  department: isCurrentlyChecked
+                                setFormProject((prev) => {
+                                  const newDepartment = isCurrentlyChecked
                                     ? prev.department.filter(d => normalizeDept(d) !== deptNorm)
-                                    : Array.from(new Set([...prev.department, dept])),
-                                }));
+                                    : Array.from(new Set([...prev.department, dept]));
+
+                                  // When a department is newly checked, auto-select all of
+                                  // that department's members into "Assign Team Members"
+                                  // (Advanced Options) by default. The creator can then
+                                  // remove any specific person's name from that list if they
+                                  // don't want the project/tasks visible to them — existing
+                                  // team members already picked are left untouched, and
+                                  // unchecking a department does not remove anyone.
+                                  let newTeam = prev.team;
+                                  if (!isCurrentlyChecked) {
+                                    const deptMemberIds = employees
+                                      .filter((emp: any) => {
+                                        if (!emp.department) return false;
+                                        const empDepts = Array.isArray(emp.department)
+                                          ? emp.department.map((d: string) => normalizeDept(d))
+                                          : [normalizeDept(emp.department)];
+                                        return empDepts.includes(deptNorm);
+                                      })
+                                      .map((emp: any) => emp.id);
+                                    newTeam = Array.from(new Set([...prev.team, ...deptMemberIds]));
+                                  }
+
+                                  return {
+                                    ...prev,
+                                    department: newDepartment,
+                                    team: newTeam,
+                                  };
+                                });
                               }}
                             />
                             {dept}
@@ -1394,6 +1468,30 @@ export default function Projects() {
                           {formProject.team.length} Selected
                         </span>
                       </div>
+                      {formProject.department.length > 0 && (
+                        <>
+                          <label className="flex items-start gap-2 text-xs cursor-pointer bg-background border rounded-md px-3 py-2">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5"
+                              checked={formProject.restrictToTeam}
+                              onChange={(e) => setFormProject({ ...formProject, restrictToTeam: e.target.checked })}
+                            />
+                            <span>
+                              <span className="font-medium">Restrict access to only the team members selected below.</span>{" "}
+                              {formProject.restrictToTeam
+                                ? "Only the people listed below will see this project and its tasks — remove anyone you don't want to have access."
+                                : "Currently OFF: everyone in the selected department(s) can still see this project, even if removed from the list below."}
+                            </span>
+                          </label>
+                          <p className="text-[11px] text-muted-foreground">
+                            Members of the selected department(s) are added here automatically.
+                            {formProject.restrictToTeam
+                              ? " Remove anyone below who should not see this project or its tasks."
+                              : " Turn on \"Restrict access\" above for removals here to actually take effect."}
+                          </p>
+                        </>
+                      )}
 
                       {/* Search input for team members */}
                       <Input

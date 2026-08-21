@@ -85,6 +85,12 @@ export const projects = pgTable("projects", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   completedAt: timestamp("completed_at"),
+  // When true, only employees explicitly saved in project_team_members can
+  // see this project (department match alone is NOT enough). When false
+  // (the default, and the value for every project that existed before this
+  // flag was added), a department match still grants access on its own —
+  // this preserves old behavior for existing projects untouched.
+  restrictToTeam: boolean("restrict_to_team").notNull().default(false),
 }, (table) => [
   index("idx_projects_status").on(table.status),
   index("idx_projects_created_at").on(table.createdAt),

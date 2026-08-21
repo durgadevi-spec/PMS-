@@ -976,6 +976,34 @@ export async function registerRoutes(
     return v;
   }
 
+  // Helper: given a list of project IDs that matched purely via department,
+  // filter out any project that has been explicitly marked "restrict to
+  // team" (projects.restrictToTeam = true).
+  //
+  // WHY: Selecting a department on a project used to make it visible to
+  // EVERY employee in that department, with no way to exclude someone. Now,
+  // an admin can opt a project into "only the saved team list matters" via
+  // the restrictToTeam flag (set explicitly from the UI — new projects
+  // default it on, existing projects only get it if someone turns it on).
+  //
+  // Existing projects are NEVER silently affected: restrictToTeam defaults
+  // to false for every row that existed before this flag was introduced, so
+  // deptProjectIds passes straight through for them and department-wide
+  // visibility keeps working exactly as before — even for projects that
+  // already happen to have some team rows saved.
+  async function filterDeptProjectIdsForLegacyVisibility(deptProjectIds: (string | null | undefined)[]): Promise<string[]> {
+    const uniqueIds = Array.from(new Set(deptProjectIds.filter((id): id is string => !!id)));
+    if (uniqueIds.length === 0) return [];
+
+    const restrictedRows = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(inArray(projects.id, uniqueIds), eq(projects.restrictToTeam, true)));
+
+    const restrictedProjectIds = new Set(restrictedRows.map((r) => r.id));
+    return uniqueIds.filter((pid) => !restrictedProjectIds.has(pid));
+  }
+
   // Helper: find session by token and attach user info
   async function getUserFromToken(token?: string | null) {
     if (!token) return null;
@@ -1824,9 +1852,15 @@ export async function registerRoutes(
           const isTeamMember = teamProjectIds.has(pid);
           const hasAssignedTask = taskProjIds.has(pid);
 
-          // Department-based visibility
+          // Department-based visibility — skipped only for projects that
+          // have been explicitly opted into "restrict to team" (see
+          // restrictToTeam column). Every project that existed before this
+          // flag was introduced defaults to false, so this keeps working
+          // exactly as before for them, even ones that already happen to
+          // have some team rows saved.
+          const isRestrictedToTeam = Boolean((p as any).restrictToTeam);
           const projectDepts = departmentMap.get(pid) || [];
-          const isDeptMatch = projectDepts.some((d: string) => normalizeDept(d) === reqDeptNorm);
+          const isDeptMatch = !isRestrictedToTeam && projectDepts.some((d: string) => normalizeDept(d) === reqDeptNorm);
 
           // Also allow the creator to see it (safety fallback)
           const isCreator = p.createdByEmployeeId === requestingEmployeeId;
@@ -1923,6 +1957,7 @@ export async function registerRoutes(
         progress = 0,
         team = [],
         vendors: vendorList = [],
+        restrictToTeam = false,
       } = req.body;
 
       // Validate required fields using validator
@@ -1991,6 +2026,7 @@ export async function registerRoutes(
           startDate: finalStartDate as any,
           endDate: finalEndDate as any,
           createdByEmployeeId: req.employee?.id || null,
+          restrictToTeam: Boolean(restrictToTeam),
         })
         .returning();
 
@@ -2047,6 +2083,7 @@ export async function registerRoutes(
         vendors: vendorList || [],
         holdReason: holdReason?.trim() || null,
         createdByEmployeeId: created.createdByEmployeeId || null,
+        restrictToTeam: Boolean(restrictToTeam),
       };
 
       debug("✅ Project created successfully:", created.id);
@@ -2137,6 +2174,14 @@ export async function registerRoutes(
         startDate: formatDate(startDate),
         endDate: formatDate(endDate),
       };
+
+      // Only touch restrictToTeam if the caller actually sent it. This keeps
+      // every existing project's flag exactly as it was (default false) for
+      // any save that doesn't explicitly include this field, so old projects
+      // never get silently restricted.
+      if (req.body.restrictToTeam !== undefined) {
+        updateData.restrictToTeam = Boolean(req.body.restrictToTeam);
+      }
 
       // Set completedAt when status is moved to Completed
       if (status === "Completed") {
@@ -2251,6 +2296,7 @@ export async function registerRoutes(
         team: team || [],
         vendors: vendorList || [],
         holdReason: holdReason?.trim() || null,
+        restrictToTeam: updated?.restrictToTeam ?? false,
       };
 
       console.log("✅ Project updated successfully:", id);
@@ -2480,6 +2526,7 @@ export async function registerRoutes(
           startDate: originalProject.startDate,
           endDate: originalProject.endDate,
           createdByEmployeeId: req.employee?.id || originalProject.createdByEmployeeId || null,
+          restrictToTeam: originalProject.restrictToTeam ?? false,
         }).returning();
 
         // 2. PROJECT-LEVEL LINKED RECORDS (departments, team, vendors, files)
@@ -2999,13 +3046,17 @@ export async function registerRoutes(
       const [proj] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
       if (!proj) return res.status(404).json({ error: "Project not found" });
 
-      const [membership] = await db.select().from(projectTeamMembers).where(and(eq(projectTeamMembers.projectId, projectId), eq(projectTeamMembers.employeeId, requestingEmployeeId))).limit(1);
+      const projectTeamRows = await db.select().from(projectTeamMembers).where(eq(projectTeamMembers.projectId, projectId));
+      const membership = projectTeamRows.find((m: any) => m.employeeId === requestingEmployeeId);
       const isProjectCreator = proj.createdByEmployeeId === requestingEmployeeId;
 
-      // Department match
+      // Department match — skipped only if this project has been explicitly
+      // opted into "restrict to team" (restrictToTeam column, default false
+      // for every project that existed before this flag was introduced).
+      const isRestrictedToTeam = Boolean((proj as any).restrictToTeam);
       const projectDepts = await db.select().from(projectDepartments).where(eq(projectDepartments.projectId, projectId));
       const reqDeptNorm = normalizeDept(requestingEmployeeDepartment);
-      const isDeptMatch = projectDepts.some(d => normalizeDept(d.department) === reqDeptNorm);
+      const isDeptMatch = !isRestrictedToTeam && projectDepts.some(d => normalizeDept(d.department) === reqDeptNorm);
 
       const hasAccess = isAdmin || isE0001 || !!membership || isProjectCreator || isDeptMatch;
 
@@ -4978,7 +5029,7 @@ export async function registerRoutes(
           .select({ projectId: projectDepartments.projectId })
           .from(projectDepartments)
           .where(eq(projectDepartments.department, normalizeDept(requestingEmployeeDepartment)));
-        const deptProjectIds = deptProjectIdsRaw.map((r) => r.projectId);
+        const deptProjectIds = await filterDeptProjectIdsForLegacyVisibility(deptProjectIdsRaw.map((r) => r.projectId));
 
         const teamProjectIdsRaw = await db
           .select({ projectId: projectTeamMembers.projectId })
@@ -6014,10 +6065,12 @@ export async function registerRoutes(
             .where(or(eq(subtasks.assignedTo, requestingEmployeeId), eq(subtaskMembers.employeeId, requestingEmployeeId))),
         ]);
 
-        const deptProjectIds = deptProjectIdsRaw.map((r) => r.projectId);
+        const deptProjectIds = await filterDeptProjectIdsForLegacyVisibility(deptProjectIdsRaw.map((r) => r.projectId));
         const teamProjectIds = teamProjectIdsRaw.map((r) => r.projectId);
 
-        // Accessible projects = team member OR department match
+        // Accessible projects = team member OR department match (department
+        // match only applies to legacy projects with no explicit team list —
+        // see filterDeptProjectIdsForLegacyVisibility)
         const accessibleProjectIds = Array.from(new Set([...deptProjectIds, ...teamProjectIds]));
 
         const taskMemberIds = taskMemberIdsRaw.map((r) => r.taskId);
@@ -6209,7 +6262,7 @@ export async function registerRoutes(
           .select({ projectId: projectDepartments.projectId })
           .from(projectDepartments)
           .where(eq(projectDepartments.department, reqDeptNorm));
-        const deptProjectIds = deptProjectIdsRaw.map((r) => r.projectId);
+        const deptProjectIds = await filterDeptProjectIdsForLegacyVisibility(deptProjectIdsRaw.map((r) => r.projectId));
 
         // 2. They are explicitly in the project team
         const teamProjectIdsRaw = await db
@@ -6299,16 +6352,24 @@ export async function registerRoutes(
         const reqDeptNorm = normalizeDept(requestingEmployeeDepartment);
 
         // Check if the employee has project-level access (department match OR team membership OR creator)
-        const [deptMatch, teamMatch] = await Promise.all([
+        const [deptMatch, teamMatch, projectFlagRows] = await Promise.all([
           db.select({ id: projectDepartments.projectId })
             .from(projectDepartments)
             .where(and(eq(projectDepartments.projectId, projectId), eq(projectDepartments.department, reqDeptNorm))),
           db.select({ id: projectTeamMembers.projectId })
             .from(projectTeamMembers)
             .where(and(eq(projectTeamMembers.projectId, projectId), eq(projectTeamMembers.employeeId, requestingEmployeeId))),
+          db.select({ restrictToTeam: projects.restrictToTeam })
+            .from(projects)
+            .where(eq(projects.id, projectId)),
         ]);
 
-        const hasProjectAccess = deptMatch.length > 0 || teamMatch.length > 0;
+        // Department match only grants access for projects that have NOT
+        // been explicitly opted into "restrict to team" (restrictToTeam
+        // column, default false for every project that existed before this
+        // flag was introduced — so this preserves old behavior for them).
+        const isRestrictedToTeam = Boolean(projectFlagRows[0]?.restrictToTeam);
+        const hasProjectAccess = (deptMatch.length > 0 && !isRestrictedToTeam) || teamMatch.length > 0;
 
         if (hasProjectAccess) {
           // User has project-level access — show ALL tasks in the project
@@ -6513,14 +6574,30 @@ export async function registerRoutes(
         const isMember = membership.length > 0;
 
         if (!isMember) {
-          // Check if project department matches
+          // Check if project department matches, but only honor that if the
+          // project has NOT been explicitly opted into "restrict to team"
+          // (restrictToTeam column, default false for every project that
+          // existed before this flag was introduced). If it has been opted
+          // in, being on the project's team (checked below) is what grants
+          // access instead.
           const reqDeptNorm = normalizeDept(requestingEmployeeDepartment);
-          const projectDeptsRaw = await db
-            .select()
-            .from(projectDepartments)
-            .where(and(eq(projectDepartments.projectId, task.projectId), eq(projectDepartments.department, reqDeptNorm)));
+          const [projectDeptsRaw, projectTeamRaw, projectFlagRows] = await Promise.all([
+            db.select()
+              .from(projectDepartments)
+              .where(and(eq(projectDepartments.projectId, task.projectId), eq(projectDepartments.department, reqDeptNorm))),
+            db.select()
+              .from(projectTeamMembers)
+              .where(eq(projectTeamMembers.projectId, task.projectId)),
+            db.select({ restrictToTeam: projects.restrictToTeam })
+              .from(projects)
+              .where(eq(projects.id, task.projectId)),
+          ]);
 
-          if (projectDeptsRaw.length === 0) {
+          const isRestrictedToTeam = Boolean(projectFlagRows[0]?.restrictToTeam);
+          const isProjectTeamMember = projectTeamRaw.some((r: any) => r.employeeId === requestingEmployeeId);
+          const isDeptMatch = !isRestrictedToTeam && projectDeptsRaw.length > 0;
+
+          if (!isProjectTeamMember && !isDeptMatch) {
             return res.status(403).json({ error: "Access denied to this task" });
           }
         }
