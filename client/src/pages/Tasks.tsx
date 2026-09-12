@@ -12,6 +12,9 @@ import {
   ChevronRight,
   ChevronLeft,
   ChevronDown,
+  ChevronsDown,
+  ChevronsUp,
+  SlidersHorizontal,
   CheckCircle2,
   Circle,
   X,
@@ -479,6 +482,7 @@ function ManageTagsDialog({ allTags, setAllTags, setTasks }: { allTags: any[], s
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [editingTagName, setEditingTagName] = useState("");
   const [deleteTagTarget, setDeleteTagTarget] = useState<{ id: string; name: string } | null>(null);
+  const tagSearchInputRef = useRef<HTMLInputElement>(null);
 
   const handleCreate = async () => {
     if (!newTagName.trim()) return;
@@ -555,7 +559,13 @@ function ManageTagsDialog({ allTags, setAllTags, setTasks }: { allTags: any[], s
           <span className="hidden sm:inline">Manage Tags</span>
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent
+        className="sm:max-w-[425px]"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          tagSearchInputRef.current?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Manage Tags</DialogTitle>
           <DialogDescription>Create, edit, or delete tags here.</DialogDescription>
@@ -573,6 +583,7 @@ function ManageTagsDialog({ allTags, setAllTags, setTasks }: { allTags: any[], s
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <Input
+              ref={tagSearchInputRef}
               className="pl-9"
               placeholder="Search tags..."
               value={tagSearchQuery}
@@ -776,6 +787,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
   const [statusPopoverOpen, setStatusPopoverOpen] = useState(false);
   const [assigneePopoverOpen, setAssigneePopoverOpen] = useState(false);
   const [depDialogOpen, setDepDialogOpen] = useState(false);
+  const [advancedOptionsOpen, setAdvancedOptionsOpen] = useState(false);
   const [pendingFlagTask, setPendingFlagTask] = useState<{ id: string, flag: 'isIssue' | 'isAddon', projectId: string } | null>(null);
   const [selectedParentTaskId, setSelectedParentTaskId] = useState<string>("");
   const [parentTaskPopoverOpen, setParentTaskPopoverOpen] = useState(false);
@@ -825,6 +837,12 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     const saved = localStorage.getItem("tasks_sortConfig");
     return saved ? JSON.parse(saved) : null;
   });
+
+  // Subtask date sort (independent of the task-level sortConfig above —
+  // purely controls the display order of subtask rows nested under each
+  // expanded task; never mutates subtask data or affects task sorting).
+  const [subtaskSortField, setSubtaskSortField] = useState<"none" | "startDate" | "endDate">("none");
+  const [subtaskSortDirection, setSubtaskSortDirection] = useState<"asc" | "desc">("asc");
 
 
   const [customFilters, setCustomFilters] = useState<CustomFilter[]>(() => {
@@ -1066,6 +1084,10 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
   // Bulk Task Owner
   const [bulkTaskOwnerId, setBulkTaskOwnerId] = useState<string>("");
   const [bulkTaskOwnerPopoverOpen, setBulkTaskOwnerPopoverOpen] = useState(false);
+
+  // Bulk Status
+  const [bulkStatus, setBulkStatus] = useState<string>("");
+  const [bulkStatusPopoverOpen, setBulkStatusPopoverOpen] = useState(false);
 
 
   // Show completed
@@ -1832,13 +1854,15 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
           apiFetch(
             projectId
               ? `/api/tasks/${projectId}?status=${statusParam}`
-              : `/api/tasks/bulk?status=${statusParam}`
-            // NOTE: bypassCache removed on purpose. apiClient already caches GETs
-            // for 5 minutes AND already clears the entire cache automatically on
-            // any POST/PUT/DELETE (see apiClient.ts). So re-visiting the same
-            // project/filter combo now reuses the cached response instantly
-            // instead of re-hitting the network + DB every single time, while
-            // task mutations still always show fresh data since they wipe cache.
+              : `/api/tasks/bulk?status=${statusParam}`,
+            { bypassCache: true }
+            // Restored bypassCache here: this mount-time load was relying on
+            // apiClient auto-clearing its GET cache on every POST/PUT/DELETE,
+            // but a page refresh right after a bulk status change was still
+            // showing the pre-change status — meaning that invalidation isn't
+            // reliably covering every mutating task endpoint. Forcing a fresh
+            // fetch here guarantees the list is never stale after a reload,
+            // at the cost of the cache-hit speedup on repeat project visits.
           ).then((r) => r.ok ? r.json() : []),
           apiFetch(
             projectId
@@ -2414,7 +2438,27 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     filteredTasks.length > 0 &&
     filteredTasks.every((t) => selectedTaskIds.includes(t.id));
 
+  // Some (but not all) tasks in the current filtered view are selected.
+  // Drives the indeterminate ("-") state of the header "select all" checkbox:
+  //   none selected      -> unchecked (☐)
+  //   some selected      -> indeterminate (−)
+  //   all selected       -> checked (✓)
+  const someSelected =
+    !allSelected &&
+    filteredTasks.some((t) => selectedTaskIds.includes(t.id));
+
+  // Native <input type="checkbox"> has no `indeterminate` prop, so we set the
+  // DOM property directly via a ref whenever the selection changes.
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = someSelected;
+    }
+  }, [someSelected]);
+
   const toggleSelectAll = () => {
+    // Selecting from an unchecked OR indeterminate state selects everything;
+    // only fully-checked toggles back to nothing selected.
     if (allSelected) setSelectedTaskIds([]);
     else setSelectedTaskIds(filteredTasks.map((t) => t.id));
   };
@@ -2476,6 +2520,73 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       .catch(() => {
         /* leave subtasks empty; expand chevron still shows the count badge */
       });
+  };
+
+  // Expand/Collapse ALL currently-visible tasks that have subtasks at once.
+  // Acts as a toggle: if every expandable task is already expanded, it
+  // collapses everything; otherwise it expands everything (lazy-loading
+  // any subtask lists that haven't been fetched yet, same as a single
+  // manual expand does).
+  const expandableTaskIds = useMemo(
+    () =>
+      paginatedTasks
+        .filter((t) => ((t.subtaskCount ?? 0) > 0) || (Array.isArray(t.subtasks) && t.subtasks.length > 0))
+        .map((t) => t.id),
+    [paginatedTasks]
+  );
+
+  const allExpanded =
+    expandableTaskIds.length > 0 && expandableTaskIds.every((id) => expandedTasks.includes(id));
+
+  const toggleExpandAll = () => {
+    if (allExpanded) {
+      setExpandedTasks([]);
+      return;
+    }
+
+    setExpandedTasks(expandableTaskIds);
+
+    // Lazy-load subtasks for any of these tasks that only have a count so
+    // far, mirroring the single-row expand behavior.
+    const idsNeedingLoad = paginatedTasks.filter((t) => {
+      const hasCount = (t.subtaskCount ?? 0) > 0;
+      const alreadyLoaded = Array.isArray(t.subtasks) && t.subtasks.length > 0;
+      return expandableTaskIds.includes(t.id) && hasCount && !alreadyLoaded;
+    });
+
+    idsNeedingLoad.forEach((t) => {
+      apiFetch(`/api/tasks/${t.id}/subtasks`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => {
+          const loaded = Array.isArray(data) ? data : [];
+          setTasks((prev) =>
+            prev.map((task) =>
+              task.id === t.id
+                ? {
+                  ...task,
+                  subtasks: loaded.map((st: any) => ({
+                    ...st,
+                    isCompleted: !!st.isCompleted,
+                    progress: st.progress || 0,
+                    isAddon: !!(st.isAddon || st.is_addon),
+                    isIssue: !!(st.isIssue || st.is_issue),
+                    keyStepId: st.keyStepId || st.key_step_id || null,
+                    taskPeriod: st.taskPeriod || st.task_period || "custom",
+                    reminderFrequency: st.reminderFrequency || st.reminder_frequency || "1 time",
+                    assignerId: st.assignerId || st.assigner_id || null,
+                    durationDays: typeof st.durationDays === 'number' ? st.durationDays : (typeof st.duration_days === 'number' ? st.duration_days : null),
+                    completionDate: st.completionDate || st.completion_date || null,
+                    tags: st.tags || [],
+                  })),
+                }
+                : task
+            )
+          );
+        })
+        .catch(() => {
+          /* leave subtasks empty; row still shows expanded with count badge */
+        });
+    });
   };
 
   const openAdd = () => {
@@ -2808,6 +2919,36 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       refreshTasks();
     } catch (err) {
       toast({ title: "Failed to assign task owner", variant: "destructive" });
+      setTasks(originalTasks);
+    }
+  };
+
+  const handleBulkAssignStatus = async () => {
+    if (selectedTaskIds.length === 0 || !bulkStatus) return;
+
+    const originalTasks = tasks;
+
+    try {
+      // Optimistic update
+      setTasks(prev => prev.map(t =>
+        selectedTaskIds.includes(t.id) ? { ...t, status: bulkStatus } : t
+      ));
+
+      const res = await apiFetch("/api/tasks/bulk-update-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskIds: selectedTaskIds, status: bulkStatus }),
+      });
+
+      if (!res.ok) throw new Error("Bulk status update failed");
+
+      toast({ title: `Status updated to "${bulkStatus}" for ${selectedTaskIds.length} task(s)` });
+      setBulkStatusPopoverOpen(false);
+      setBulkStatus("");
+      setSelectedTaskIds([]);
+      refreshTasks();
+    } catch (err) {
+      toast({ title: "Failed to update status", variant: "destructive" });
       setTasks(originalTasks);
     }
   };
@@ -3960,7 +4101,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
         <Command>
           <CommandList>
             <CommandGroup>
-              {["Not Started", "Planned", "In Progress", "On Hold", "Completed", "Cancelled"].map((s) => (
+              {["Pending", "Not Started", "Planned", "In Progress", "On Hold", "Completed", "Cancelled"].map((s) => (
                 <CommandItem
                   key={s}
                   onSelect={() => handleInlineTaskUpdate(task.id, "status", s)}
@@ -4498,188 +4639,272 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
               <Plus className="h-4 w-4 mr-1" /> Add Task
             </Button>
 
-            <Button
-              onClick={() => setQuickAddTaskOpen(true)}
-              variant="outline"
-              className="h-9 px-3 min-w-[110px] justify-center border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300 hover:shadow-md shadow-sm transition-all duration-150"
-            >
-              <Plus className="h-4 w-4 mr-1" /> Quick Add
-            </Button>
+            <TaskFilters
+              projectId={projectId}
+              setProjectId={setProjectId}
+              projects={projects}
+              clientFilter={clientFilter}
+              setClientFilter={setClientFilter}
+              clients={clients}
+              selectedKeyStepId={selectedKeyStepId}
+              setSelectedKeyStepId={setSelectedKeyStepId}
+              keySteps={keySteps}
+              departmentFilter={departmentFilter}
+              setDepartmentFilter={setDepartmentFilter}
+              departments={departments}
+              statusFilter={statusFilter}
+              setStatusFilter={setStatusFilter}
+              assigneeFilter={assigneeFilter}
+              setAssigneeFilter={setAssigneeFilter}
+              employees={employees}
+              priorityFilter={priorityFilter}
+              setPriorityFilter={setPriorityFilter}
+              progressFilter={progressFilter}
+              setProgressFilter={setProgressFilter}
+              uniqueProgressValues={uniqueProgressValues}
+              pinnedFilters={pinnedFilters}
+              setPinnedFilters={setPinnedFilters}
+              tasks={tasks} // Needed to calculate unique values for pinned fields
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              customFilters={customFilters}
+              setCustomFilters={setCustomFilters}
+              savedFilterSets={savedFilterSets}
+              setSavedFilterSets={setSavedFilterSets}
+              groupBy={groupBy}
+              setGroupBy={setGroupBy}
+              onClearAll={handleClearFilters}
+              onApply={refreshTasks} // Fetch fresh tasks when filters are applied
+              periodFilter={periodFilter}
+              setPeriodFilter={setPeriodFilter}
+              tagFilter={tagFilter}
+              setTagFilter={setTagFilter}
+              startDateFilter={startDateFilter}
+              setStartDateFilter={setStartDateFilter}
+              endDateFilter={endDateFilter}
+              setEndDateFilter={setEndDateFilter}
+              allTags={allTags}
+            />
 
-            <ManageColumns columns={columnsConfig} setColumns={setColumnsConfig} defaultColumns={defaultColumns} onSave={handleSaveColumns} />
-            <ManageTagsDialog allTags={allTags} setAllTags={setAllTags} />
-            <Button
-              variant="outline"
-              onClick={() => setDepDialogOpen(true)}
-              disabled={!(projectId && projectId !== "all") && !(isFrozen && frozenProjectId)}
-              title={(!projectId || projectId === "all") && isFrozen && frozenProjectId ? `Manage dependencies for frozen project` : undefined}
-              className="h-9 px-3 min-w-[110px] justify-center text-primary border-primary/20 hover:bg-primary/5 transition-all duration-150"
-            >
-              <Link2 className="h-4 w-4 mr-1" /> Dependencies
-            </Button>
-          </div>
-
-          {/* ROW 2 — Filters & search */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <TaskFilters
-                projectId={projectId}
-                setProjectId={setProjectId}
-                projects={projects}
-                clientFilter={clientFilter}
-                setClientFilter={setClientFilter}
-                clients={clients}
-                selectedKeyStepId={selectedKeyStepId}
-                setSelectedKeyStepId={setSelectedKeyStepId}
-                keySteps={keySteps}
-                departmentFilter={departmentFilter}
-                setDepartmentFilter={setDepartmentFilter}
-                departments={departments}
-                statusFilter={statusFilter}
-                setStatusFilter={setStatusFilter}
-                assigneeFilter={assigneeFilter}
-                setAssigneeFilter={setAssigneeFilter}
-                employees={employees}
-                priorityFilter={priorityFilter}
-                setPriorityFilter={setPriorityFilter}
-                progressFilter={progressFilter}
-                setProgressFilter={setProgressFilter}
-                uniqueProgressValues={uniqueProgressValues}
-                pinnedFilters={pinnedFilters}
-                setPinnedFilters={setPinnedFilters}
-                tasks={tasks} // Needed to calculate unique values for pinned fields
-                searchQuery={searchQuery}
-                setSearchQuery={setSearchQuery}
-                customFilters={customFilters}
-                setCustomFilters={setCustomFilters}
-                savedFilterSets={savedFilterSets}
-                setSavedFilterSets={setSavedFilterSets}
-                groupBy={groupBy}
-                setGroupBy={setGroupBy}
-                onClearAll={handleClearFilters}
-                onApply={refreshTasks} // Fetch fresh tasks when filters are applied
-                periodFilter={periodFilter}
-                setPeriodFilter={setPeriodFilter}
-                tagFilter={tagFilter}
-                setTagFilter={setTagFilter}
-                startDateFilter={startDateFilter}
-                setStartDateFilter={setStartDateFilter}
-                endDateFilter={endDateFilter}
-                setEndDateFilter={setEndDateFilter}
-                allTags={allTags}
-              />
-
-              <Button
-                onClick={() => setOverdueFilter(prev => prev === "overdue" ? "all" : "overdue")}
-                className={cn(
-                  "h-9 px-3 min-w-[100px] justify-center text-xs flex items-center gap-2 shadow-sm transition-all duration-150 hover:shadow-md",
-                  overdueFilter === "overdue" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
-                )}
-              >
-                <span>Overdue</span>
-              </Button>
-
-              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-md border border-slate-200 h-9 hover:border-slate-300 hover:shadow-sm transition-all duration-150">
-                <input
-                  type="checkbox"
-                  id="showCompleted"
-                  checked={showCompleted}
-                  onChange={(e) => setShowCompleted(e.target.checked)}
-                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                />
-                <label htmlFor="showCompleted" className="text-xs font-medium text-slate-700 cursor-pointer">
-                  Completed
-                </label>
-              </div>
-
-              <Popover open={exportColSelOpen} onOpenChange={setExportColSelOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="h-9 px-3 min-w-[110px] justify-center border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
-                  >
-                    <Download className="h-4 w-4 mr-1" /> Export
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-64 p-3" align="end" onOpenAutoFocus={(e) => e.preventDefault()}>
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-semibold text-sm">Select Columns to Export</h4>
-                      <label className="text-xs flex items-center gap-1 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={exportSelectedCols.length === columnsConfig.filter(c => c.visible).length}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setExportSelectedCols(columnsConfig.filter(c => c.visible).map(c => c.id));
-                            } else {
-                              setExportSelectedCols([]);
-                            }
-                          }}
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                        />
-                        Select All
-                      </label>
+            {/* Advanced Options — consolidates the less-frequently-used
+                actions (Quick Add, Manage Columns, Manage Tags, Expand All,
+                Dependencies, Subtask sort, Overdue, Completed, Export, Type
+                & Search) behind one icon button so the toolbar stays tidy.
+                "Filters" stays out on the main bar next to Add Task since
+                it's used most often. Each item below is a self-contained
+                control (it manages its own popover/dialog/sheet), so they
+                just render normally here. */}
+            <Popover open={advancedOptionsOpen} onOpenChange={setAdvancedOptionsOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="h-9 px-3 min-w-[110px] justify-center gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
+                >
+                  <SlidersHorizontal className="h-4 w-4" /> Advanced Options
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[520px] p-2 max-h-[60vh] overflow-y-auto" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                  {/* ---- LEFT COLUMN: Actions + Subtasks ---- */}
+                  <div className="space-y-2">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Actions</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Button
+                          onClick={() => setQuickAddTaskOpen(true)}
+                          variant="outline"
+                          className="h-8 px-2.5 text-xs justify-center border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300 hover:shadow-md shadow-sm transition-all duration-150"
+                        >
+                          <Plus className="h-3.5 w-3.5 mr-1" /> Quick Add
+                        </Button>
+                        <ManageColumns columns={columnsConfig} setColumns={setColumnsConfig} defaultColumns={defaultColumns} onSave={handleSaveColumns} />
+                        <ManageTagsDialog allTags={allTags} setAllTags={setAllTags} />
+                        <Button
+                          variant="outline"
+                          onClick={toggleExpandAll}
+                          disabled={expandableTaskIds.length === 0}
+                          className="h-8 px-2.5 text-xs justify-center gap-1.5 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
+                          title={allExpanded ? "Collapse all subtasks" : "Expand all subtasks"}
+                        >
+                          {allExpanded ? <ChevronsUp size={13} className="text-slate-500" /> : <ChevronsDown size={13} className="text-slate-500" />}
+                          <span>{allExpanded ? "Collapse All" : "Expand All"}</span>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => setDepDialogOpen(true)}
+                          disabled={!(projectId && projectId !== "all") && !(isFrozen && frozenProjectId)}
+                          title={(!projectId || projectId === "all") && isFrozen && frozenProjectId ? `Manage dependencies for frozen project` : undefined}
+                          className="h-8 px-2.5 text-xs justify-center text-primary border-primary/20 hover:bg-primary/5 transition-all duration-150"
+                        >
+                          <Link2 className="h-3.5 w-3.5 mr-1" /> Dependencies
+                        </Button>
+                      </div>
                     </div>
-                    <div className="max-h-[200px] overflow-y-auto space-y-1 p-1">
-                      {columnsConfig.filter(c => c.visible).map(col => (
-                        <div key={col.id} className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={exportSelectedCols.includes(col.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) setExportSelectedCols(prev => [...prev, col.id]);
-                              else setExportSelectedCols(prev => prev.filter(id => id !== col.id));
-                            }}
-                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                          />
-                          <span className="text-xs">{col.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={exportIncludeGantt}
-                        onChange={(e) => setExportIncludeGantt(e.target.checked)}
-                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                      />
-                      <span className="text-xs font-medium">Include Gantt Chart</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button size="sm" className="flex-1 text-xs" onClick={() => { setExportType('pdf'); handleExport(); }}>
-                        <FileText className="h-3 w-3 mr-1" /> PDF
-                      </Button>
-                      <Button size="sm" className="flex-1 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={() => { setExportType('excel'); handleExport(); }}>
-                        <FileSpreadsheet className="h-3 w-3 mr-1" /> Excel
-                      </Button>
+
+                    <div className="pt-2 border-t border-slate-100">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Subtasks</p>
+                      {/* Subtask date sort — display-order only, applies to every
+                          expanded task's subtask rows on this page. */}
+                      <div className="flex flex-wrap gap-1.5">
+                        <Select
+                          value={subtaskSortField}
+                          onValueChange={(v) => setSubtaskSortField(v as typeof subtaskSortField)}
+                        >
+                          <SelectTrigger className="h-8 w-[155px] text-xs" title="Sort subtasks by date">
+                            <SelectValue placeholder="Sort subtasks..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">Subtasks: Default order</SelectItem>
+                            <SelectItem value="startDate">Subtasks: Start Date</SelectItem>
+                            <SelectItem value="endDate">Subtasks: Due Date</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {subtaskSortField !== "none" && (
+                          <Select
+                            value={subtaskSortDirection}
+                            onValueChange={(v) => setSubtaskSortDirection(v as typeof subtaskSortDirection)}
+                          >
+                            <SelectTrigger className="h-8 w-[130px] text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="asc">Oldest → Newest</SelectItem>
+                              <SelectItem value="desc">Newest → Oldest</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </PopoverContent>
-              </Popover>
 
-              <Select value={addonFilter} onValueChange={setAddonFilter}>
-                <SelectTrigger className="w-28 h-9 bg-white hover:border-slate-300 transition-colors duration-150">
-                  <SelectValue placeholder="All" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="addon">Addons</SelectItem>
-                  <SelectItem value="issue">Issues</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+                  {/* ---- RIGHT COLUMN: Filters + Export + Type & Search ---- */}
+                  <div className="space-y-2">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Filters</p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Button
+                          onClick={() => setOverdueFilter(prev => prev === "overdue" ? "all" : "overdue")}
+                          className={cn(
+                            "h-8 px-2.5 text-xs justify-center flex items-center gap-1.5 shadow-sm transition-all duration-150 hover:shadow-md",
+                            overdueFilter === "overdue" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
+                          )}
+                        >
+                          <span>Overdue</span>
+                        </Button>
 
-            <div className="flex items-center gap-2">
-              <div className="relative group">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
-                <Input
-                  className="pl-9 w-64 bg-white border-slate-200 focus:ring-2 focus:ring-blue-100 hover:border-slate-300 transition-all duration-150"
-                  placeholder="Quick search..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
+                        <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-md border border-slate-200 h-8 hover:border-slate-300 hover:shadow-sm transition-all duration-150">
+                          <input
+                            type="checkbox"
+                            id="showCompleted"
+                            checked={showCompleted}
+                            onChange={(e) => setShowCompleted(e.target.checked)}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                          />
+                          <label htmlFor="showCompleted" className="text-xs font-medium text-slate-700 cursor-pointer">
+                            Completed
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Export</p>
+                      <Popover open={exportColSelOpen} onOpenChange={setExportColSelOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            className="h-9 px-3 min-w-[110px] justify-center border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
+                          >
+                            <Download className="h-4 w-4 mr-1" /> Export
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-64 p-3" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                          <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-semibold text-sm">Select Columns to Export</h4>
+                              <label className="text-xs flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={exportSelectedCols.length === columnsConfig.filter(c => c.visible).length}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setExportSelectedCols(columnsConfig.filter(c => c.visible).map(c => c.id));
+                                    } else {
+                                      setExportSelectedCols([]);
+                                    }
+                                  }}
+                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                                />
+                                Select All
+                              </label>
+                            </div>
+                            <div className="max-h-[200px] overflow-y-auto space-y-1 p-1">
+                              {columnsConfig.filter(c => c.visible).map(col => (
+                                <div key={col.id} className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={exportSelectedCols.includes(col.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) setExportSelectedCols(prev => [...prev, col.id]);
+                                      else setExportSelectedCols(prev => prev.filter(id => id !== col.id));
+                                    }}
+                                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                                  />
+                                  <span className="text-xs">{col.label}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={exportIncludeGantt}
+                                onChange={(e) => setExportIncludeGantt(e.target.checked)}
+                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                              />
+                              <span className="text-xs font-medium">Include Gantt Chart</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <Button size="sm" className="flex-1 text-xs" onClick={() => { setExportType('pdf'); handleExport(); }}>
+                                <FileText className="h-3 w-3 mr-1" /> PDF
+                              </Button>
+                              <Button size="sm" className="flex-1 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={() => { setExportType('excel'); handleExport(); }}>
+                                <FileSpreadsheet className="h-3 w-3 mr-1" /> Excel
+                              </Button>
+                            </div>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Type</p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Select value={addonFilter} onValueChange={setAddonFilter}>
+                          <SelectTrigger className="w-24 h-8 text-xs bg-white hover:border-slate-300 transition-colors duration-150">
+                            <SelectValue placeholder="All" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All</SelectItem>
+                            <SelectItem value="addon">Addons</SelectItem>
+                            <SelectItem value="issue">Issues</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            {/* Quick Search — placed next to Advanced Options for easy access */}
+            <div className="relative group">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+              <Input
+                className="pl-9 h-9 w-[220px] bg-white border-slate-200 focus:ring-2 focus:ring-blue-100 hover:border-slate-300 hover:shadow-sm shadow-sm transition-all duration-150"
+                placeholder="Quick search..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
             </div>
           </div>
         </div>
@@ -5089,6 +5314,35 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
               </PopoverContent>
             </Popover>
 
+            {/* Bulk Assign Status */}
+            <Popover open={bulkStatusPopoverOpen} onOpenChange={setBulkStatusPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="h-8 text-xs bg-white border border-slate-300 px-3">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Status
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-3" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
+                <div className="space-y-3">
+                  <h4 className="font-semibold text-xs">Assign Status to Selected</h4>
+                  <Select value={bulkStatus} onValueChange={setBulkStatus}>
+                    <SelectTrigger className="w-full text-xs h-8">
+                      <SelectValue placeholder="Select Status..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {["Pending", "Not Started", "Planned", "In Progress", "On Hold", "Completed", "Cancelled"].map((s) => (
+                        <SelectItem key={s} value={s} className="text-xs">
+                          {s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" onClick={handleBulkAssignStatus} className="w-full h-8 text-xs" disabled={!bulkStatus}>
+                    Apply Status
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+
             <div className="h-6 w-[1px] bg-amber-300 mx-2" />
 
             <Button
@@ -5123,6 +5377,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
               <th className="px-1 py-2.5 align-middle border-r border-slate-200 w-6 text-center text-[10px] font-bold text-slate-400 uppercase tracking-wider"><GripVertical size={12} className="mx-auto" /></th>
               <th className="px-2 py-2.5 align-middle border-r border-slate-200 w-8 text-center text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                 <input
+                  ref={selectAllCheckboxRef}
                   type="checkbox"
                   checked={allSelected}
                   onChange={toggleSelectAll}
@@ -5364,7 +5619,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                   }
                                 }}
                               >
-                                <SelectTrigger className="h-6 w-full text-[11px] font-bold px-1 py-0 border-0 bg-transparent hover:bg-slate-100 shadow-none focus:ring-0 [&>svg]:opacity-0 hover:[&>svg]:opacity-100">
+                                <SelectTrigger className="h-7 w-full text-[11px] font-bold px-1 py-0 border-0 bg-transparent hover:bg-slate-100 shadow-none focus:ring-0 [&>span]:line-clamp-none [&>span]:overflow-visible [&>svg]:opacity-0 hover:[&>svg]:opacity-100">
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent className="max-h-[250px]">
@@ -6149,781 +6404,799 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                           {/* Render Nested Expandable Subtask Rows */}
                           {isExpanded && (
                             <>
-                              {Array.isArray(task.subtasks) && task.subtasks.map((subtask, subIndex) => {
-                                const isSubtaskCompleted = !!subtask.isCompleted;
-                                const members = Array.isArray(subtask.assignedTo) ? subtask.assignedTo : [];
+                              {(() => {
+                                const rawSubtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+                                // Display-only date sort (does not mutate task.subtasks or
+                                // any saved data — purely controls the order these rows render in).
+                                const sortedSubtasks = subtaskSortField === "none"
+                                  ? rawSubtasks
+                                  : [...rawSubtasks].sort((a: any, b: any) => {
+                                    const aVal = a?.[subtaskSortField] || "";
+                                    const bVal = b?.[subtaskSortField] || "";
+                                    if (!aVal && !bVal) return 0;
+                                    if (!aVal) return 1;
+                                    if (!bVal) return -1;
+                                    return subtaskSortDirection === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                                  });
+                                return sortedSubtasks.map((subtask, subIndex) => {
+                                  const isSubtaskCompleted = !!subtask.isCompleted;
+                                  const members = Array.isArray(subtask.assignedTo) ? subtask.assignedTo : [];
 
-                                return (
-                                  <tr
-                                    key={subtask.id || subIndex}
-                                    className={cn(
-                                      "hover:brightness-95 border-b border-slate-200 transition-colors h-8 text-[11px] border-l-4",
-                                      isSubtaskCompleted
-                                        ? "opacity-70 bg-green-50/60 border-l-green-400"
-                                        : subtask.isIssue
-                                          ? "bg-pink-50 border-l-pink-400"
-                                          : subtask.isAddon
-                                            ? "bg-amber-50 border-l-amber-400"
-                                            : "bg-indigo-50/60 border-l-indigo-300"
-                                    )}
-                                  >
-                                    {/* Fixed: serial # placeholder for subtask */}
-                                    <td className="px-2 py-0.5 border-r text-center text-slate-300 text-[9px]">—</td>
+                                  return (
+                                    <tr
+                                      key={subtask.id || subIndex}
+                                      className={cn(
+                                        "hover:brightness-95 border-b border-slate-200 transition-colors h-8 text-[11px] border-l-4",
+                                        isSubtaskCompleted
+                                          ? "opacity-70 bg-green-50/60 border-l-green-400"
+                                          : subtask.isIssue
+                                            ? "bg-pink-50 border-l-pink-400"
+                                            : subtask.isAddon
+                                              ? "bg-amber-50 border-l-amber-400"
+                                              : "bg-indigo-50/60 border-l-indigo-300"
+                                      )}
+                                    >
+                                      {/* Serial # for subtask — shown as parent.child (e.g. "1.1") so it's
+                                          actually readable, instead of a faint dash placeholder */}
+                                      <td className="px-2 py-0.5 border-r text-center text-slate-500 text-[10px] font-semibold whitespace-nowrap">
+                                        {taskIndex + 1}.{subIndex + 1}
+                                      </td>
 
-                                    {/* Empty bullet (drag placeholder) */}
-                                    <td className="px-2 py-0.5 text-center border-r text-slate-400">
-                                      <span className="text-[9px] font-bold select-none">•</span>
-                                    </td>
+                                      {/* Empty bullet (drag placeholder) */}
+                                      <td className="px-2 py-0.5 text-center border-r text-slate-400">
+                                        <span className="text-[9px] font-bold select-none">•</span>
+                                      </td>
 
-                                    {/* Subtask tree line symbol + badge */}
-                                    <td className="px-1 py-0.5 text-center border-r font-mono text-indigo-400 select-none text-[10px]">
-                                      └─
-                                    </td>
-                                    <td className="px-1 py-0.5 border-r">
-                                      <span className="text-[7px] font-bold uppercase tracking-wider text-indigo-500 bg-indigo-100 border border-indigo-200 rounded px-1 py-0 whitespace-nowrap">
-                                        Sub
-                                      </span>
-                                    </td>
+                                      {/* Subtask tree line symbol + badge */}
+                                      <td className="px-1 py-0.5 text-center border-r font-mono text-indigo-400 select-none text-[10px]">
+                                        └─
+                                      </td>
+                                      <td className="px-1 py-0.5 border-r">
+                                        <span className="text-[7px] font-bold uppercase tracking-wider text-indigo-500 bg-indigo-100 border border-indigo-200 rounded px-1 py-0 whitespace-nowrap">
+                                          Sub
+                                        </span>
+                                      </td>
 
 
-                                    {columnsConfig.filter(c => c.visible).map(col => {
-                                      switch (col.id) {
-                                        case 'serial': return null;
-                                        case 'assignedBy': return (
-                                          <td key="assignedBy" className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
-                                            {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "assignerId" ? (
-                                              <Select
-                                                defaultOpen
-                                                onOpenChange={(open) => { if (!open) setEditingSubtaskField(null); }}
-                                                value={subtask.assignerId || ""}
-                                                onValueChange={(val) => handleInlineSubtaskUpdate(task.id, String(subtask.id), "assignerId", val)}
-                                              >
-                                                <SelectTrigger className="h-6 text-[10px] p-1 w-full"><SelectValue placeholder="Select..." /></SelectTrigger>
-                                                <SelectContent className="max-h-[200px]">
-                                                  {allEmployees.map(e => <SelectItem key={e.id} value={e.id} className="text-[10px]">{e.name}</SelectItem>)}
-                                                </SelectContent>
-                                              </Select>
-                                            ) : (
-                                              <span
-                                                className="cursor-pointer hover:bg-slate-200 text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 truncate max-w-[90px] inline-block transition-colors"
-                                                onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "assignerId", subtask.assignerId || ""); }}
-                                              >
-                                                {allEmployees.find((e: any) => String(e.id) === String(subtask.assignerId))?.name || <span className="text-slate-400 italic">None</span>}
-                                              </span>
-                                            )}
-                                          </td>
-                                        );
-                                        case 'taskOwner': return (
-                                          <td key="taskOwner" className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
-                                            {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "taskOwnerId" ? (
-                                              <Select
-                                                defaultOpen
-                                                onOpenChange={(open) => { if (!open) setEditingSubtaskField(null); }}
-                                                value={subtask.taskOwnerId || "__none__"}
-                                                onValueChange={(val) => handleInlineSubtaskUpdate(task.id, String(subtask.id), "taskOwnerId", val === "__none__" ? null : val)}
-                                              >
-                                                <SelectTrigger className="h-6 text-[10px] p-1 w-full"><SelectValue placeholder="Select..." /></SelectTrigger>
-                                                <SelectContent className="max-h-[200px]">
-                                                  <SelectItem value="__none__" className="text-[10px] text-slate-400 italic">None</SelectItem>
-                                                  {allEmployees.map(e => <SelectItem key={e.id} value={e.id} className="text-[10px]">{e.name}</SelectItem>)}
-                                                </SelectContent>
-                                              </Select>
-                                            ) : (
-                                              <span
-                                                className="cursor-pointer hover:bg-slate-200 text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 truncate max-w-[90px] inline-block transition-colors"
-                                                onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "taskOwnerId", subtask.taskOwnerId || ""); }}
-                                              >
-                                                {allEmployees.find((e: any) => String(e.id) === String(subtask.taskOwnerId))?.name || <span className="text-slate-400 italic">None</span>}
-                                              </span>
-                                            )}
-                                          </td>
-                                        );
-                                        case 'taskName': return (
-                                          <Fragment key="taskName">
-                                            {/* Subtask Title (Inline editable) & Completion Checkbox */}
-                                            <td className="px-3 py-0.5 border-r font-medium overflow-hidden">
-                                              <div className="flex items-center gap-2 pl-4">
-                                                <button
-                                                  onClick={() => toggleSubtaskCompletion(task.id, String(subtask.id), isSubtaskCompleted)}
-                                                  className="p-0 hover:scale-110 transition-transform flex-shrink-0"
-                                                  title={isSubtaskCompleted ? "Mark pending" : "Mark completed"}
+                                      {columnsConfig.filter(c => c.visible).map(col => {
+                                        switch (col.id) {
+                                          case 'serial': return null;
+                                          case 'assignedBy': return (
+                                            <td key="assignedBy" className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
+                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "assignerId" ? (
+                                                <Select
+                                                  defaultOpen
+                                                  onOpenChange={(open) => { if (!open) setEditingSubtaskField(null); }}
+                                                  value={subtask.assignerId || ""}
+                                                  onValueChange={(val) => handleInlineSubtaskUpdate(task.id, String(subtask.id), "assignerId", val)}
                                                 >
-                                                  {isSubtaskCompleted ? (
-                                                    <CheckCircle2 size={14} className="text-green-500" />
+                                                  <SelectTrigger className="h-6 text-[10px] p-1 w-full"><SelectValue placeholder="Select..." /></SelectTrigger>
+                                                  <SelectContent className="max-h-[200px]">
+                                                    {allEmployees.map(e => <SelectItem key={e.id} value={e.id} className="text-[10px]">{e.name}</SelectItem>)}
+                                                  </SelectContent>
+                                                </Select>
+                                              ) : (
+                                                <span
+                                                  className="cursor-pointer hover:bg-slate-200 text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 truncate max-w-[90px] inline-block transition-colors"
+                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "assignerId", subtask.assignerId || ""); }}
+                                                >
+                                                  {allEmployees.find((e: any) => String(e.id) === String(subtask.assignerId))?.name || <span className="text-slate-400 italic">None</span>}
+                                                </span>
+                                              )}
+                                            </td>
+                                          );
+                                          case 'taskOwner': return (
+                                            <td key="taskOwner" className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
+                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "taskOwnerId" ? (
+                                                <Select
+                                                  defaultOpen
+                                                  onOpenChange={(open) => { if (!open) setEditingSubtaskField(null); }}
+                                                  value={subtask.taskOwnerId || "__none__"}
+                                                  onValueChange={(val) => handleInlineSubtaskUpdate(task.id, String(subtask.id), "taskOwnerId", val === "__none__" ? null : val)}
+                                                >
+                                                  <SelectTrigger className="h-6 text-[10px] p-1 w-full"><SelectValue placeholder="Select..." /></SelectTrigger>
+                                                  <SelectContent className="max-h-[200px]">
+                                                    <SelectItem value="__none__" className="text-[10px] text-slate-400 italic">None</SelectItem>
+                                                    {allEmployees.map(e => <SelectItem key={e.id} value={e.id} className="text-[10px]">{e.name}</SelectItem>)}
+                                                  </SelectContent>
+                                                </Select>
+                                              ) : (
+                                                <span
+                                                  className="cursor-pointer hover:bg-slate-200 text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 truncate max-w-[90px] inline-block transition-colors"
+                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "taskOwnerId", subtask.taskOwnerId || ""); }}
+                                                >
+                                                  {allEmployees.find((e: any) => String(e.id) === String(subtask.taskOwnerId))?.name || <span className="text-slate-400 italic">None</span>}
+                                                </span>
+                                              )}
+                                            </td>
+                                          );
+                                          case 'taskName': return (
+                                            <Fragment key="taskName">
+                                              {/* Subtask Title (Inline editable) & Completion Checkbox */}
+                                              <td className="px-3 py-0.5 border-r font-medium overflow-hidden">
+                                                <div className="flex items-center gap-2 pl-4">
+                                                  <button
+                                                    onClick={() => toggleSubtaskCompletion(task.id, String(subtask.id), isSubtaskCompleted)}
+                                                    className="p-0 hover:scale-110 transition-transform flex-shrink-0"
+                                                    title={isSubtaskCompleted ? "Mark pending" : "Mark completed"}
+                                                  >
+                                                    {isSubtaskCompleted ? (
+                                                      <CheckCircle2 size={14} className="text-green-500" />
+                                                    ) : (
+                                                      <Circle size={14} className="text-slate-400 hover:text-blue-500" />
+                                                    )}
+                                                  </button>
+                                                  {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "title" ? (
+                                                    <Input
+                                                      autoFocus
+                                                      className="h-6 text-xs p-1 focus:ring-1 focus:ring-blue-500 w-full max-w-[240px]"
+                                                      value={tempSubtaskValue}
+                                                      onChange={(e) => setTempSubtaskValue(e.target.value)}
+                                                      onClick={(e) => e.stopPropagation()}
+                                                      onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') handleInlineSubtaskUpdate(task.id, String(subtask.id), "title", tempSubtaskValue);
+                                                        if (e.key === 'Escape') setEditingSubtaskField(null);
+                                                      }}
+                                                      onBlur={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "title", tempSubtaskValue)}
+                                                    />
                                                   ) : (
-                                                    <Circle size={14} className="text-slate-400 hover:text-blue-500" />
+                                                    <Tooltip>
+                                                      <TooltipTrigger asChild>
+                                                        <span
+                                                          className={cn(
+                                                            "truncate cursor-pointer hover:underline",
+                                                            isSubtaskCompleted ? "line-through text-slate-400" : "text-slate-700"
+                                                          )}
+                                                          onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "title", subtask.title); }}
+                                                        >
+                                                          {subtask.title}
+                                                        </span>
+                                                      </TooltipTrigger>
+                                                      <TooltipContent className="max-w-sm bg-slate-900 text-white text-[11px] p-2 rounded" side="top">
+                                                        <div className="font-semibold text-blue-200 mb-1">{getTaskHierarchy(task)} / {subtask.title}</div>
+                                                        <div className="text-slate-200">{subtask.description || "No description"}</div>
+                                                      </TooltipContent>
+                                                    </Tooltip>
                                                   )}
-                                                </button>
-                                                {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "title" ? (
-                                                  <Input
-                                                    autoFocus
-                                                    className="h-6 text-xs p-1 focus:ring-1 focus:ring-blue-500 w-full max-w-[240px]"
-                                                    value={tempSubtaskValue}
-                                                    onChange={(e) => setTempSubtaskValue(e.target.value)}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    onKeyDown={(e) => {
-                                                      if (e.key === 'Enter') handleInlineSubtaskUpdate(task.id, String(subtask.id), "title", tempSubtaskValue);
-                                                      if (e.key === 'Escape') setEditingSubtaskField(null);
-                                                    }}
-                                                    onBlur={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "title", tempSubtaskValue)}
-                                                  />
-                                                ) : (
-                                                  <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                      <span
-                                                        className={cn(
-                                                          "truncate cursor-pointer hover:underline",
-                                                          isSubtaskCompleted ? "line-through text-slate-400" : "text-slate-700"
-                                                        )}
-                                                        onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "title", subtask.title); }}
-                                                      >
-                                                        {subtask.title}
-                                                      </span>
-                                                    </TooltipTrigger>
-                                                    <TooltipContent className="max-w-sm bg-slate-900 text-white text-[11px] p-2 rounded" side="top">
-                                                      <div className="font-semibold text-blue-200 mb-1">{getTaskHierarchy(task)} / {subtask.title}</div>
-                                                      <div className="text-slate-200">{subtask.description || "No description"}</div>
-                                                    </TooltipContent>
-                                                  </Tooltip>
-                                                )}
-                                                {discussions.some(d => String(d.title).includes(subtask.title)) && (
-                                                  <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-[9px] px-1 py-0 font-semibold shrink-0 flex items-center gap-0.5">
-                                                    <MessageSquare size={9} />
-                                                    {discussions.filter(d => String(d.title).includes(subtask.title)).length}
-                                                  </Badge>
-                                                )}
-                                              </div>
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'project': return (
-                                          <Fragment key="project">
-                                            {/* Inherited Project */}
-                                            <td className="px-3 py-0.5 border-r text-slate-400 italic text-[10px] truncate max-w-[140px]">
-                                              {taskProject?.title || "—"}
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'keyStep': return (
-                                          <Fragment key="keyStep">
-                                            {/* Milestone / Key Step (inline editable, mirrors task row) */}
-                                            <td className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
-                                              <SubtaskKeyStepBadge taskId={task.id} subtask={subtask} />
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'period': return (
-                                          <Fragment key="period">
-                                            {/* Period (inline editable, mirrors task row) */}
-                                            <td className="px-3 py-0.5 border-r no-navigate text-center" onClick={(e) => e.stopPropagation()}>
-                                              <SubtaskPeriodBadge taskId={task.id} subtask={subtask} />
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'frequency': return (
-                                          <Fragment key="frequency">
-                                            {/* Frequency (inline editable, mirrors task row) */}
-                                            <td className="px-3 py-0.5 border-r no-navigate text-center" onClick={(e) => e.stopPropagation()}>
-                                              <SubtaskFrequencyBadge taskId={task.id} subtask={subtask} />
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'assignees': return (
-                                          <Fragment key="assignees">
-                                            {/* Subtask Assignees */}
-                                            <td className="px-3 py-0.5 border-r">
-                                              {(() => {
-                                                return (
-                                                  <Popover>
-                                                    <PopoverTrigger asChild>
-                                                      <div className="flex -space-x-1.5 overflow-hidden hover:space-x-1 transition-all duration-300 cursor-pointer p-0.5">
-                                                        {members.length === 0 ? (
-                                                          <div className="w-4.5 h-4.5 rounded-full border border-dashed border-slate-300 flex items-center justify-center text-slate-300 hover:border-blue-400 hover:text-blue-400 transition-colors">
-                                                            <Plus size={8} />
-                                                          </div>
-                                                        ) : (
-                                                          members.map((memberId: string, idx: number) => {
-                                                            const emp = allEmployees.find((e: any) => String(e.id) === String(memberId));
-                                                            const name = emp?.name || memberId;
-                                                            const initials = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+                                                  {discussions.some(d => String(d.title).includes(subtask.title)) && (
+                                                    <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-[9px] px-1 py-0 font-semibold shrink-0 flex items-center gap-0.5">
+                                                      <MessageSquare size={9} />
+                                                      {discussions.filter(d => String(d.title).includes(subtask.title)).length}
+                                                    </Badge>
+                                                  )}
+                                                </div>
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'project': return (
+                                            <Fragment key="project">
+                                              {/* Inherited Project */}
+                                              <td className="px-3 py-0.5 border-r text-slate-400 italic text-[10px] truncate max-w-[140px]">
+                                                {taskProject?.title || "—"}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'keyStep': return (
+                                            <Fragment key="keyStep">
+                                              {/* Milestone / Key Step (inline editable, mirrors task row) */}
+                                              <td className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
+                                                <SubtaskKeyStepBadge taskId={task.id} subtask={subtask} />
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'period': return (
+                                            <Fragment key="period">
+                                              {/* Period (inline editable, mirrors task row) */}
+                                              <td className="px-3 py-0.5 border-r no-navigate text-center" onClick={(e) => e.stopPropagation()}>
+                                                <SubtaskPeriodBadge taskId={task.id} subtask={subtask} />
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'frequency': return (
+                                            <Fragment key="frequency">
+                                              {/* Frequency (inline editable, mirrors task row) */}
+                                              <td className="px-3 py-0.5 border-r no-navigate text-center" onClick={(e) => e.stopPropagation()}>
+                                                <SubtaskFrequencyBadge taskId={task.id} subtask={subtask} />
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'assignees': return (
+                                            <Fragment key="assignees">
+                                              {/* Subtask Assignees */}
+                                              <td className="px-3 py-0.5 border-r">
+                                                {(() => {
+                                                  return (
+                                                    <Popover>
+                                                      <PopoverTrigger asChild>
+                                                        <div className="flex -space-x-1.5 overflow-hidden hover:space-x-1 transition-all duration-300 cursor-pointer p-0.5">
+                                                          {members.length === 0 ? (
+                                                            <div className="w-4.5 h-4.5 rounded-full border border-dashed border-slate-300 flex items-center justify-center text-slate-300 hover:border-blue-400 hover:text-blue-400 transition-colors">
+                                                              <Plus size={8} />
+                                                            </div>
+                                                          ) : (
+                                                            members.map((memberId: string, idx: number) => {
+                                                              const emp = allEmployees.find((e: any) => String(e.id) === String(memberId));
+                                                              const name = emp?.name || memberId;
+                                                              const initials = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
 
-                                                            if (idx > 2) return null;
-                                                            if (idx === 2 && members.length > 3) {
+                                                              if (idx > 2) return null;
+                                                              if (idx === 2 && members.length > 3) {
+                                                                return (
+                                                                  <div key="extra" className="relative inline-flex items-center justify-center w-4.5 h-4.5 rounded-full bg-slate-200 border border-white text-[7px] font-bold text-slate-655 z-0">
+                                                                    +{members.length - 2}
+                                                                  </div>
+                                                                );
+                                                              }
+
                                                               return (
-                                                                <div key="extra" className="relative inline-flex items-center justify-center w-4.5 h-4.5 rounded-full bg-slate-200 border border-white text-[7px] font-bold text-slate-655 z-0">
-                                                                  +{members.length - 2}
+                                                                <div
+                                                                  key={memberId}
+                                                                  className="relative inline-flex items-center justify-center w-4.5 h-4.5 rounded-full bg-slate-400 border border-white text-[7px] font-bold text-white shadow-sm ring-1 ring-slate-900/5 transition-transform hover:z-10 hover:scale-110"
+                                                                  title={name}
+                                                                >
+                                                                  {initials}
                                                                 </div>
                                                               );
-                                                            }
+                                                            })
+                                                          )}
+                                                        </div>
+                                                      </PopoverTrigger>
+                                                      <PopoverContent className="w-56 p-0 shadow-xl border-slate-200" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                                                        <Command>
+                                                          <CommandInput placeholder="Search member..." className="h-8 text-xs" />
+                                                          <CommandList className="max-h-48 overflow-y-auto">
+                                                            <CommandEmpty className="py-2 text-[10px] text-slate-400 text-center">No member found.</CommandEmpty>
+                                                            <CommandGroup heading="Subtask Members">
+                                                              {allEmployees.map((emp) => {
+                                                                const isAssigned = members.some(mId => String(mId) === String(emp.id));
+                                                                return (
+                                                                  <CommandItem
+                                                                    key={emp.id}
+                                                                    onSelect={async () => {
+                                                                      const newAssigned = isAssigned
+                                                                        ? members.filter(id => String(id) !== String(emp.id))
+                                                                        : [...members, String(emp.id)];
 
-                                                            return (
-                                                              <div
-                                                                key={memberId}
-                                                                className="relative inline-flex items-center justify-center w-4.5 h-4.5 rounded-full bg-slate-400 border border-white text-[7px] font-bold text-white shadow-sm ring-1 ring-slate-900/5 transition-transform hover:z-10 hover:scale-110"
-                                                                title={name}
-                                                              >
-                                                                {initials}
-                                                              </div>
-                                                            );
-                                                          })
-                                                        )}
-                                                      </div>
-                                                    </PopoverTrigger>
-                                                    <PopoverContent className="w-56 p-0 shadow-xl border-slate-200" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
-                                                      <Command>
-                                                        <CommandInput placeholder="Search member..." className="h-8 text-xs" />
-                                                        <CommandList className="max-h-48 overflow-y-auto">
-                                                          <CommandEmpty className="py-2 text-[10px] text-slate-400 text-center">No member found.</CommandEmpty>
-                                                          <CommandGroup heading="Subtask Members">
-                                                            {allEmployees.map((emp) => {
-                                                              const isAssigned = members.some(mId => String(mId) === String(emp.id));
+                                                                      // Optimistic update — avoid a full refreshTasks() so
+                                                                      // other expanded rows' subtasks don't get wiped out.
+                                                                      setTasks(prev => prev.map(t => t.id !== task.id ? t : {
+                                                                        ...t,
+                                                                        subtasks: (t.subtasks || []).map(s => s.id === subtask.id ? { ...s, assignedTo: newAssigned } : s),
+                                                                      }));
+
+                                                                      try {
+                                                                        const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
+                                                                          method: "PATCH",
+                                                                          headers: { "Content-Type": "application/json" },
+                                                                          body: JSON.stringify({ assignedTo: newAssigned }),
+                                                                        });
+                                                                        if (!res.ok) throw new Error("Failed to update subtask assignee");
+                                                                      } catch (err) {
+                                                                        console.error("Subtask member update failed:", err);
+                                                                        toast({ variant: "destructive", title: "Error", description: "Failed to update subtask assignee. Please try again." });
+                                                                        refreshTasks();
+                                                                      }
+                                                                    }}
+                                                                    className="text-xs cursor-pointer"
+                                                                  >
+                                                                    <div className={cn(
+                                                                      "mr-2 flex h-3 w-3 items-center justify-center rounded-sm border border-primary",
+                                                                      isAssigned ? "bg-primary text-primary-foreground" : "opacity-50 [&_svg]:invisible"
+                                                                    )}>
+                                                                      <Check className="h-2 w-2" />
+                                                                    </div>
+                                                                    <span className="flex-1 text-[11px]">{emp.name}</span>
+                                                                  </CommandItem>
+                                                                );
+                                                              })}
+                                                            </CommandGroup>
+                                                          </CommandList>
+                                                        </Command>
+                                                      </PopoverContent>
+                                                    </Popover>
+                                                  );
+                                                })()}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'ccMembers': return (
+                                            <Fragment key="ccMembers">
+                                              {/* Subtask CC Members */}
+                                              <td className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
+                                                {(() => {
+                                                  const ccList = Array.isArray(subtask.ccMembers) ? subtask.ccMembers : [];
+                                                  return (
+                                                    <Popover>
+                                                      <PopoverTrigger asChild>
+                                                        <button className="flex flex-wrap gap-1 max-w-[110px] hover:bg-slate-100 rounded px-0.5 py-0.5 transition-colors">
+                                                          {ccList.length === 0 ? (
+                                                            <span className="text-[9px] text-slate-350 italic">None</span>
+                                                          ) : (
+                                                            ccList.slice(0, 2).map((memberId: string) => {
+                                                              const emp = allEmployees.find((e: any) => String(e.id) === String(memberId));
                                                               return (
-                                                                <CommandItem
-                                                                  key={emp.id}
-                                                                  onSelect={async () => {
-                                                                    const newAssigned = isAssigned
-                                                                      ? members.filter(id => String(id) !== String(emp.id))
-                                                                      : [...members, String(emp.id)];
-
-                                                                    // Optimistic update — avoid a full refreshTasks() so
-                                                                    // other expanded rows' subtasks don't get wiped out.
-                                                                    setTasks(prev => prev.map(t => t.id !== task.id ? t : {
-                                                                      ...t,
-                                                                      subtasks: (t.subtasks || []).map(s => s.id === subtask.id ? { ...s, assignedTo: newAssigned } : s),
-                                                                    }));
-
-                                                                    try {
-                                                                      const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
-                                                                        method: "PATCH",
-                                                                        headers: { "Content-Type": "application/json" },
-                                                                        body: JSON.stringify({ assignedTo: newAssigned }),
-                                                                      });
-                                                                      if (!res.ok) throw new Error("Failed to update subtask assignee");
-                                                                    } catch (err) {
-                                                                      console.error("Subtask member update failed:", err);
-                                                                      toast({ variant: "destructive", title: "Error", description: "Failed to update subtask assignee. Please try again." });
-                                                                      refreshTasks();
-                                                                    }
-                                                                  }}
-                                                                  className="text-xs cursor-pointer"
-                                                                >
-                                                                  <div className={cn(
-                                                                    "mr-2 flex h-3 w-3 items-center justify-center rounded-sm border border-primary",
-                                                                    isAssigned ? "bg-primary text-primary-foreground" : "opacity-50 [&_svg]:invisible"
-                                                                  )}>
-                                                                    <Check className="h-2 w-2" />
-                                                                  </div>
-                                                                  <span className="flex-1 text-[11px]">{emp.name}</span>
-                                                                </CommandItem>
+                                                                <span key={memberId} className="text-[8px] bg-slate-100 text-slate-600 px-1 rounded border border-slate-200 truncate max-w-[60px]" title={emp?.name || memberId}>
+                                                                  {emp?.name || memberId}
+                                                                </span>
                                                               );
-                                                            })}
-                                                          </CommandGroup>
-                                                        </CommandList>
-                                                      </Command>
-                                                    </PopoverContent>
-                                                  </Popover>
-                                                );
-                                              })()}
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'ccMembers': return (
-                                          <Fragment key="ccMembers">
-                                            {/* Subtask CC Members */}
-                                            <td className="px-3 py-0.5 border-r no-navigate" onClick={(e) => e.stopPropagation()}>
-                                              {(() => {
-                                                const ccList = Array.isArray(subtask.ccMembers) ? subtask.ccMembers : [];
-                                                return (
-                                                  <Popover>
-                                                    <PopoverTrigger asChild>
-                                                      <button className="flex flex-wrap gap-1 max-w-[110px] hover:bg-slate-100 rounded px-0.5 py-0.5 transition-colors">
-                                                        {ccList.length === 0 ? (
-                                                          <span className="text-[9px] text-slate-350 italic">None</span>
-                                                        ) : (
-                                                          ccList.slice(0, 2).map((memberId: string) => {
-                                                            const emp = allEmployees.find((e: any) => String(e.id) === String(memberId));
-                                                            return (
-                                                              <span key={memberId} className="text-[8px] bg-slate-100 text-slate-600 px-1 rounded border border-slate-200 truncate max-w-[60px]" title={emp?.name || memberId}>
-                                                                {emp?.name || memberId}
-                                                              </span>
-                                                            );
-                                                          })
-                                                        )}
-                                                        {ccList.length > 2 && (
-                                                          <span className="text-[8px] text-slate-400 font-bold">+{ccList.length - 2}</span>
-                                                        )}
-                                                      </button>
-                                                    </PopoverTrigger>
-                                                    <PopoverContent className="w-56 p-0 shadow-xl border-slate-200" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
-                                                      <Command>
-                                                        <CommandInput placeholder="Search member..." className="h-8 text-xs" />
-                                                        <CommandList className="max-h-48 overflow-y-auto">
-                                                          <CommandEmpty className="py-2 text-[10px] text-slate-400 text-center">No member found.</CommandEmpty>
-                                                          <CommandGroup heading="CC Members">
-                                                            {allEmployees.map((emp) => {
-                                                              const isAssigned = ccList.some((mId: string) => String(mId) === String(emp.id));
-                                                              return (
-                                                                <CommandItem
-                                                                  key={emp.id}
-                                                                  onSelect={() => toggleSubtaskCcMember(task.id, String(subtask.id), ccList, String(emp.id))}
-                                                                  className="text-xs cursor-pointer"
-                                                                >
-                                                                  <div className={cn(
-                                                                    "mr-2 flex h-3 w-3 items-center justify-center rounded-sm border border-primary",
-                                                                    isAssigned ? "bg-primary text-primary-foreground" : "opacity-50 [&_svg]:invisible"
-                                                                  )}>
-                                                                    <Check className="h-2 w-2" />
-                                                                  </div>
-                                                                  <span className="flex-1 text-[11px]">{emp.name}</span>
-                                                                </CommandItem>
-                                                              );
-                                                            })}
-                                                          </CommandGroup>
-                                                        </CommandList>
-                                                      </Command>
-                                                    </PopoverContent>
-                                                  </Popover>
-                                                );
-                                              })()}
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'tags': return (
-                                          <Fragment key="tags">
-                                            {/* Tags (inline editable, mirrors task row) */}
-                                            <td className="px-3 py-0.5 border-r">
-                                              <InlineSubtaskTagCell taskId={task.id} subtask={subtask} allTags={allTags} setAllTags={setAllTags} setTasks={setTasks} />
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'startDate': return (
-                                          <Fragment key="startDate">
-                                            {/* Subtask Start Date */}
-                                            <td className="px-2 py-0.5 text-center border-r font-medium text-slate-600">
-                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "startDate" ? (
-                                                <Input
-                                                  type="date"
-                                                  lang="en-GB"
-                                                  autoFocus
-                                                  className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 text-center"
-                                                  value={tempSubtaskValue}
-                                                  onChange={(e) => setTempSubtaskValue(e.target.value)}
-                                                  onBlur={async () => {
-                                                    const newStartDate = tempSubtaskValue || null;
-                                                    const updatedSubtasks = (task.subtasks || []).map(s => {
-                                                      if (s.id === subtask.id) {
-                                                        const updated = { ...s, startDate: newStartDate };
-                                                        if (s.endDate && newStartDate && s.endDate < newStartDate) {
-                                                          updated.endDate = newStartDate;
-                                                        }
-                                                        return updated;
-                                                      }
-                                                      return s;
-                                                    });
-
-                                                    // Recalculate parent task dates
-                                                    const validStarts = updatedSubtasks.map(s => s.startDate).filter(Boolean) as string[];
-                                                    const validEnds = updatedSubtasks.map(s => s.endDate).filter(Boolean) as string[];
-
-                                                    const newParentStart = validStarts.length > 0 ? validStarts.reduce((min, cur) => cur < min ? cur : min) : null;
-                                                    const newParentEnd = validEnds.length > 0 ? validEnds.reduce((max, cur) => cur > max ? cur : max) : null;
-
-                                                    let durationDays = task.durationDays;
-                                                    if (newParentStart && newParentEnd) {
-                                                      const sD = new Date(newParentStart);
-                                                      const eD = new Date(newParentEnd);
-                                                      if (!isNaN(sD.getTime()) && !isNaN(eD.getTime())) {
-                                                        const diff = Math.round((eD.getTime() - sD.getTime()) / (1000 * 60 * 60 * 24));
-                                                        if (diff >= 0) durationDays = diff;
-                                                      }
-                                                    }
-
-                                                    setTasks(prev => prev.map(t => t.id !== task.id ? t : {
-                                                      ...t,
-                                                      startDate: newParentStart || undefined,
-                                                      endDate: newParentEnd || undefined,
-                                                      durationDays,
-                                                      subtasks: updatedSubtasks,
-                                                    }));
-                                                    setEditingSubtaskField(null);
-
-                                                    const body: any = { startDate: newStartDate };
-                                                    const targetSub = updatedSubtasks.find(s => s.id === subtask.id);
-                                                    if (targetSub && targetSub.endDate !== subtask.endDate) {
-                                                      body.endDate = targetSub.endDate;
-                                                    }
-
-                                                    try {
-                                                      const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
-                                                        method: "PATCH",
-                                                        headers: { "Content-Type": "application/json" },
-                                                        body: JSON.stringify(body),
-                                                      });
-                                                      if (!res.ok) throw new Error("Failed to update subtask date");
-                                                    } catch (err) {
-                                                      console.error(err);
-                                                      toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
-                                                      refreshTasks();
-                                                    }
-                                                  }}
-                                                  onKeyDown={(e) => {
-                                                    if (e.key === 'Escape') setEditingSubtaskField(null);
-                                                    if (e.key === 'Enter') e.currentTarget.blur();
-                                                  }}
-                                                />
-                                              ) : (
-                                                <span
-                                                  className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-block w-full text-center text-xs"
-                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "startDate", subtask.startDate || ""); }}
-                                                >
-                                                  {formatDate(subtask.startDate) || "—"}
-                                                </span>
-                                              )}
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'endDate': return (
-                                          <Fragment key="endDate">
-                                            {/* Subtask End Date */}
-                                            <td className="px-2 py-0.5 text-center border-r font-medium text-slate-600">
-                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "endDate" ? (
-                                                <Input
-                                                  type="date"
-                                                  lang="en-GB"
-                                                  autoFocus
-                                                  className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 text-center"
-                                                  value={tempSubtaskValue}
-                                                  min={subtask.startDate || undefined}
-                                                  onChange={(e) => setTempSubtaskValue(e.target.value)}
-                                                  onBlur={async () => {
-                                                    const newEndDate = subtask.startDate && tempSubtaskValue && tempSubtaskValue < subtask.startDate
-                                                      ? subtask.startDate
-                                                      : (tempSubtaskValue || null);
-
-                                                    const updatedSubtasks = (task.subtasks || []).map(s => s.id === subtask.id ? { ...s, endDate: newEndDate } : s);
-
-                                                    // Recalculate parent task dates
-                                                    const validStarts = updatedSubtasks.map(s => s.startDate).filter(Boolean) as string[];
-                                                    const validEnds = updatedSubtasks.map(s => s.endDate).filter(Boolean) as string[];
-
-                                                    const newParentStart = validStarts.length > 0 ? validStarts.reduce((min, cur) => cur < min ? cur : min) : null;
-                                                    const newParentEnd = validEnds.length > 0 ? validEnds.reduce((max, cur) => cur > max ? cur : max) : null;
-
-                                                    let durationDays = task.durationDays;
-                                                    if (newParentStart && newParentEnd) {
-                                                      const sD = new Date(newParentStart);
-                                                      const eD = new Date(newParentEnd);
-                                                      if (!isNaN(sD.getTime()) && !isNaN(eD.getTime())) {
-                                                        const diff = Math.round((eD.getTime() - sD.getTime()) / (1000 * 60 * 60 * 24));
-                                                        if (diff >= 0) durationDays = diff;
-                                                      }
-                                                    }
-
-                                                    setTasks(prev => prev.map(t => t.id !== task.id ? t : {
-                                                      ...t,
-                                                      startDate: newParentStart || undefined,
-                                                      endDate: newParentEnd || undefined,
-                                                      durationDays,
-                                                      subtasks: updatedSubtasks,
-                                                    }));
-                                                    setEditingSubtaskField(null);
-
-                                                    try {
-                                                      const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
-                                                        method: "PATCH",
-                                                        headers: { "Content-Type": "application/json" },
-                                                        body: JSON.stringify({ endDate: newEndDate }),
-                                                      });
-                                                      if (!res.ok) throw new Error("Failed to update subtask date");
-                                                    } catch (err) {
-                                                      console.error(err);
-                                                      toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
-                                                      refreshTasks();
-                                                    }
-                                                  }}
-                                                  onKeyDown={(e) => {
-                                                    if (e.key === 'Escape') setEditingSubtaskField(null);
-                                                    if (e.key === 'Enter') e.currentTarget.blur();
-                                                  }}
-                                                />
-                                              ) : (
-                                                <span
-                                                  className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-block w-full text-center text-xs"
-                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "endDate", subtask.endDate || ""); }}
-                                                >
-                                                  {formatDate(subtask.endDate) || "—"}
-                                                </span>
-                                              )}
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'priority': return (
-                                          <Fragment key="priority">
-                                            {/* Subtask Priority Badge */}
-                                            <td className="px-3 py-0.5 border-r text-center no-navigate" onClick={(e) => e.stopPropagation()}>
-                                              <Popover open={editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "priority"}
-                                                onOpenChange={(open) => open ? startEditingSubtask(String(subtask.id), "priority", subtask.priority || "medium") : setEditingSubtaskField(null)}>
-                                                <PopoverTrigger asChild>
-                                                  <button className="cursor-pointer hover:opacity-80 transition-opacity">
-                                                    <Badge
-                                                      variant="outline"
-                                                      className={cn(
-                                                        "text-[9px] font-bold px-1.5 py-0 rounded-full inline-flex justify-center min-w-[55px] border capitalize whitespace-nowrap",
-                                                        subtask.priority === "high"
-                                                          ? "bg-rose-50 text-rose-700 border-rose-200"
-                                                          : subtask.priority === "low"
-                                                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                                            : "bg-amber-50 text-amber-700 border-amber-200"
-                                                      )}
-                                                    >
-                                                      {subtask.priority || "medium"}
-                                                    </Badge>
-                                                  </button>
-                                                </PopoverTrigger>
-                                                <PopoverContent className="p-0 w-28" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
-                                                  <Command>
-                                                    <CommandList>
-                                                      <CommandGroup>
-                                                        {["low", "medium", "high"].map((p) => (
-                                                          <CommandItem
-                                                            key={p}
-                                                            onSelect={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "priority", p)}
-                                                            className="capitalize text-xs cursor-pointer"
-                                                          >
-                                                            <Check className={cn("mr-2 h-3 w-3", (subtask.priority || "medium") === p ? "opacity-100" : "opacity-0")} />
-                                                            {p}
-                                                          </CommandItem>
-                                                        ))}
-                                                      </CommandGroup>
-                                                    </CommandList>
-                                                  </Command>
-                                                </PopoverContent>
-                                              </Popover>
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'status': return (
-                                          <Fragment key="status">
-                                            {/* Subtask Status Badge */}
-                                            <td className="px-3 py-0.5 border-r text-center no-navigate" onClick={(e) => e.stopPropagation()}>
-                                              <Popover open={editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "status"}
-                                                onOpenChange={(open) => open ? startEditingSubtask(String(subtask.id), "status", subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started")) : setEditingSubtaskField(null)}>
-                                                <PopoverTrigger asChild>
-                                                  <button
-                                                    className={cn(
-                                                      "px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider whitespace-nowrap border cursor-pointer hover:opacity-80 transition-all",
-                                                      getStatusStyle(subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started"))
-                                                    )}
-                                                  >
-                                                    {subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started")}
-                                                  </button>
-                                                </PopoverTrigger>
-                                                <PopoverContent className="p-0 w-36" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
-                                                  <Command>
-                                                    <CommandList>
-                                                      <CommandGroup>
-                                                        {["Not Started", "Planned", "In Progress", "On Hold", "Completed", "Cancelled"].map((s) => (
-                                                          <CommandItem
-                                                            key={s}
-                                                            onSelect={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "status", s)}
-                                                            className="text-xs cursor-pointer"
-                                                          >
-                                                            <Check className={cn("mr-2 h-3 w-3", (subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started")) === s ? "opacity-100" : "opacity-0")} />
-                                                            {s}
-                                                          </CommandItem>
-                                                        ))}
-                                                      </CommandGroup>
-                                                    </CommandList>
-                                                  </Command>
-                                                </PopoverContent>
-                                              </Popover>
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'progress': return (
-                                          <Fragment key="progress">
-                                            {/* Subtask Progress bar */}
-                                            <td className="px-3 py-0.5 border-r text-center">
-                                              <div className="flex items-center gap-1 w-full justify-center">
-                                                <Progress value={isSubtaskCompleted ? 100 : (subtask.progress || 0)} className="h-1 bg-slate-100 flex-1" />
-                                                <span className="text-[9px] font-bold text-slate-500 w-6 shrink-0 text-right">
-                                                  {isSubtaskCompleted ? 100 : (subtask.progress || 0)}%
-                                                </span>
-                                              </div>
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'completionDate': return (
-                                          <Fragment key="completionDate">
-                                            {/* Completion Date (inline editable, mirrors task row) */}
-                                            <td className="px-2 py-0.5 text-center border-r font-medium text-slate-700" onClick={(e) => e.stopPropagation()}>
-                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "completionDate" ? (
-                                                <div className="flex items-center gap-1 justify-center">
+                                                            })
+                                                          )}
+                                                          {ccList.length > 2 && (
+                                                            <span className="text-[8px] text-slate-400 font-bold">+{ccList.length - 2}</span>
+                                                          )}
+                                                        </button>
+                                                      </PopoverTrigger>
+                                                      <PopoverContent className="w-56 p-0 shadow-xl border-slate-200" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                                                        <Command>
+                                                          <CommandInput placeholder="Search member..." className="h-8 text-xs" />
+                                                          <CommandList className="max-h-48 overflow-y-auto">
+                                                            <CommandEmpty className="py-2 text-[10px] text-slate-400 text-center">No member found.</CommandEmpty>
+                                                            <CommandGroup heading="CC Members">
+                                                              {allEmployees.map((emp) => {
+                                                                const isAssigned = ccList.some((mId: string) => String(mId) === String(emp.id));
+                                                                return (
+                                                                  <CommandItem
+                                                                    key={emp.id}
+                                                                    onSelect={() => toggleSubtaskCcMember(task.id, String(subtask.id), ccList, String(emp.id))}
+                                                                    className="text-xs cursor-pointer"
+                                                                  >
+                                                                    <div className={cn(
+                                                                      "mr-2 flex h-3 w-3 items-center justify-center rounded-sm border border-primary",
+                                                                      isAssigned ? "bg-primary text-primary-foreground" : "opacity-50 [&_svg]:invisible"
+                                                                    )}>
+                                                                      <Check className="h-2 w-2" />
+                                                                    </div>
+                                                                    <span className="flex-1 text-[11px]">{emp.name}</span>
+                                                                  </CommandItem>
+                                                                );
+                                                              })}
+                                                            </CommandGroup>
+                                                          </CommandList>
+                                                        </Command>
+                                                      </PopoverContent>
+                                                    </Popover>
+                                                  );
+                                                })()}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'tags': return (
+                                            <Fragment key="tags">
+                                              {/* Tags (inline editable, mirrors task row) */}
+                                              <td className="px-3 py-0.5 border-r">
+                                                <InlineSubtaskTagCell taskId={task.id} subtask={subtask} allTags={allTags} setAllTags={setAllTags} setTasks={setTasks} />
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'startDate': return (
+                                            <Fragment key="startDate">
+                                              {/* Subtask Start Date */}
+                                              <td className="px-2 py-0.5 text-center border-r font-medium text-slate-600">
+                                                {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "startDate" ? (
                                                   <Input
                                                     type="date"
                                                     lang="en-GB"
                                                     autoFocus
-                                                    className="h-6 text-[10px] p-0.5"
+                                                    className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 text-center"
                                                     value={tempSubtaskValue}
                                                     onChange={(e) => setTempSubtaskValue(e.target.value)}
-                                                    onBlur={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", tempSubtaskValue)}
+                                                    onBlur={async () => {
+                                                      const newStartDate = tempSubtaskValue || null;
+                                                      const updatedSubtasks = (task.subtasks || []).map(s => {
+                                                        if (s.id === subtask.id) {
+                                                          const updated = { ...s, startDate: newStartDate };
+                                                          if (s.endDate && newStartDate && s.endDate < newStartDate) {
+                                                            updated.endDate = newStartDate;
+                                                          }
+                                                          return updated;
+                                                        }
+                                                        return s;
+                                                      });
+
+                                                      // Recalculate parent task dates
+                                                      const validStarts = updatedSubtasks.map(s => s.startDate).filter(Boolean) as string[];
+                                                      const validEnds = updatedSubtasks.map(s => s.endDate).filter(Boolean) as string[];
+
+                                                      const newParentStart = validStarts.length > 0 ? validStarts.reduce((min, cur) => cur < min ? cur : min) : null;
+                                                      const newParentEnd = validEnds.length > 0 ? validEnds.reduce((max, cur) => cur > max ? cur : max) : null;
+
+                                                      let durationDays = task.durationDays;
+                                                      if (newParentStart && newParentEnd) {
+                                                        const sD = new Date(newParentStart);
+                                                        const eD = new Date(newParentEnd);
+                                                        if (!isNaN(sD.getTime()) && !isNaN(eD.getTime())) {
+                                                          const diff = Math.round((eD.getTime() - sD.getTime()) / (1000 * 60 * 60 * 24));
+                                                          if (diff >= 0) durationDays = diff;
+                                                        }
+                                                      }
+
+                                                      setTasks(prev => prev.map(t => t.id !== task.id ? t : {
+                                                        ...t,
+                                                        startDate: newParentStart || undefined,
+                                                        endDate: newParentEnd || undefined,
+                                                        durationDays,
+                                                        subtasks: updatedSubtasks,
+                                                      }));
+                                                      setEditingSubtaskField(null);
+
+                                                      const body: any = { startDate: newStartDate };
+                                                      const targetSub = updatedSubtasks.find(s => s.id === subtask.id);
+                                                      if (targetSub && targetSub.endDate !== subtask.endDate) {
+                                                        body.endDate = targetSub.endDate;
+                                                      }
+
+                                                      try {
+                                                        const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
+                                                          method: "PATCH",
+                                                          headers: { "Content-Type": "application/json" },
+                                                          body: JSON.stringify(body),
+                                                        });
+                                                        if (!res.ok) throw new Error("Failed to update subtask date");
+                                                      } catch (err) {
+                                                        console.error(err);
+                                                        toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
+                                                        refreshTasks();
+                                                      }
+                                                    }}
                                                     onKeyDown={(e) => {
-                                                      if (e.key === 'Enter') handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", tempSubtaskValue);
                                                       if (e.key === 'Escape') setEditingSubtaskField(null);
+                                                      if (e.key === 'Enter') e.currentTarget.blur();
                                                     }}
                                                   />
-                                                  {tempSubtaskValue && (
-                                                    <button
-                                                      type="button"
-                                                      title="Clear date"
-                                                      className="text-slate-400 hover:text-red-500 shrink-0"
-                                                      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setTempSubtaskValue(""); handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", ""); }}
-                                                    >
-                                                      <X size={10} />
+                                                ) : (
+                                                  <span
+                                                    className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-block w-full text-center text-xs"
+                                                    onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "startDate", subtask.startDate || ""); }}
+                                                  >
+                                                    {formatDate(subtask.startDate) || "—"}
+                                                  </span>
+                                                )}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'endDate': return (
+                                            <Fragment key="endDate">
+                                              {/* Subtask End Date */}
+                                              <td className="px-2 py-0.5 text-center border-r font-medium text-slate-600">
+                                                {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "endDate" ? (
+                                                  <Input
+                                                    type="date"
+                                                    lang="en-GB"
+                                                    autoFocus
+                                                    className="h-6 text-[10px] p-0.5 w-full bg-transparent border-none text-slate-700 text-center"
+                                                    value={tempSubtaskValue}
+                                                    min={subtask.startDate || undefined}
+                                                    onChange={(e) => setTempSubtaskValue(e.target.value)}
+                                                    onBlur={async () => {
+                                                      const newEndDate = subtask.startDate && tempSubtaskValue && tempSubtaskValue < subtask.startDate
+                                                        ? subtask.startDate
+                                                        : (tempSubtaskValue || null);
+
+                                                      const updatedSubtasks = (task.subtasks || []).map(s => s.id === subtask.id ? { ...s, endDate: newEndDate } : s);
+
+                                                      // Recalculate parent task dates
+                                                      const validStarts = updatedSubtasks.map(s => s.startDate).filter(Boolean) as string[];
+                                                      const validEnds = updatedSubtasks.map(s => s.endDate).filter(Boolean) as string[];
+
+                                                      const newParentStart = validStarts.length > 0 ? validStarts.reduce((min, cur) => cur < min ? cur : min) : null;
+                                                      const newParentEnd = validEnds.length > 0 ? validEnds.reduce((max, cur) => cur > max ? cur : max) : null;
+
+                                                      let durationDays = task.durationDays;
+                                                      if (newParentStart && newParentEnd) {
+                                                        const sD = new Date(newParentStart);
+                                                        const eD = new Date(newParentEnd);
+                                                        if (!isNaN(sD.getTime()) && !isNaN(eD.getTime())) {
+                                                          const diff = Math.round((eD.getTime() - sD.getTime()) / (1000 * 60 * 60 * 24));
+                                                          if (diff >= 0) durationDays = diff;
+                                                        }
+                                                      }
+
+                                                      setTasks(prev => prev.map(t => t.id !== task.id ? t : {
+                                                        ...t,
+                                                        startDate: newParentStart || undefined,
+                                                        endDate: newParentEnd || undefined,
+                                                        durationDays,
+                                                        subtasks: updatedSubtasks,
+                                                      }));
+                                                      setEditingSubtaskField(null);
+
+                                                      try {
+                                                        const res = await apiFetch(`/api/subtasks/${subtask.id}`, {
+                                                          method: "PATCH",
+                                                          headers: { "Content-Type": "application/json" },
+                                                          body: JSON.stringify({ endDate: newEndDate }),
+                                                        });
+                                                        if (!res.ok) throw new Error("Failed to update subtask date");
+                                                      } catch (err) {
+                                                        console.error(err);
+                                                        toast({ variant: "destructive", title: "Error", description: "Failed to update subtask date. Please try again." });
+                                                        refreshTasks();
+                                                      }
+                                                    }}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === 'Escape') setEditingSubtaskField(null);
+                                                      if (e.key === 'Enter') e.currentTarget.blur();
+                                                    }}
+                                                  />
+                                                ) : (
+                                                  <span
+                                                    className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-block w-full text-center text-xs"
+                                                    onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "endDate", subtask.endDate || ""); }}
+                                                  >
+                                                    {formatDate(subtask.endDate) || "—"}
+                                                  </span>
+                                                )}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'priority': return (
+                                            <Fragment key="priority">
+                                              {/* Subtask Priority Badge */}
+                                              <td className="px-3 py-0.5 border-r text-center no-navigate" onClick={(e) => e.stopPropagation()}>
+                                                <Popover open={editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "priority"}
+                                                  onOpenChange={(open) => open ? startEditingSubtask(String(subtask.id), "priority", subtask.priority || "medium") : setEditingSubtaskField(null)}>
+                                                  <PopoverTrigger asChild>
+                                                    <button className="cursor-pointer hover:opacity-80 transition-opacity">
+                                                      <Badge
+                                                        variant="outline"
+                                                        className={cn(
+                                                          "text-[9px] font-bold px-1.5 py-0 rounded-full inline-flex justify-center min-w-[55px] border capitalize whitespace-nowrap",
+                                                          subtask.priority === "high"
+                                                            ? "bg-rose-50 text-rose-700 border-rose-200"
+                                                            : subtask.priority === "low"
+                                                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                                              : "bg-amber-50 text-amber-700 border-amber-200"
+                                                        )}
+                                                      >
+                                                        {subtask.priority || "medium"}
+                                                      </Badge>
                                                     </button>
-                                                  )}
+                                                  </PopoverTrigger>
+                                                  <PopoverContent className="p-0 w-28" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
+                                                    <Command>
+                                                      <CommandList>
+                                                        <CommandGroup>
+                                                          {["low", "medium", "high"].map((p) => (
+                                                            <CommandItem
+                                                              key={p}
+                                                              onSelect={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "priority", p)}
+                                                              className="capitalize text-xs cursor-pointer"
+                                                            >
+                                                              <Check className={cn("mr-2 h-3 w-3", (subtask.priority || "medium") === p ? "opacity-100" : "opacity-0")} />
+                                                              {p}
+                                                            </CommandItem>
+                                                          ))}
+                                                        </CommandGroup>
+                                                      </CommandList>
+                                                    </Command>
+                                                  </PopoverContent>
+                                                </Popover>
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'status': return (
+                                            <Fragment key="status">
+                                              {/* Subtask Status Badge */}
+                                              <td className="px-3 py-0.5 border-r text-center no-navigate" onClick={(e) => e.stopPropagation()}>
+                                                <Popover open={editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "status"}
+                                                  onOpenChange={(open) => open ? startEditingSubtask(String(subtask.id), "status", subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started")) : setEditingSubtaskField(null)}>
+                                                  <PopoverTrigger asChild>
+                                                    <button
+                                                      className={cn(
+                                                        "px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider whitespace-nowrap border cursor-pointer hover:opacity-80 transition-all",
+                                                        getStatusStyle(subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started"))
+                                                      )}
+                                                    >
+                                                      {subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started")}
+                                                    </button>
+                                                  </PopoverTrigger>
+                                                  <PopoverContent className="p-0 w-36" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
+                                                    <Command>
+                                                      <CommandList>
+                                                        <CommandGroup>
+                                                          {["Pending", "Not Started", "Planned", "In Progress", "On Hold", "Completed", "Cancelled"].map((s) => (
+                                                            <CommandItem
+                                                              key={s}
+                                                              onSelect={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "status", s)}
+                                                              className="text-xs cursor-pointer"
+                                                            >
+                                                              <Check className={cn("mr-2 h-3 w-3", (subtask.status || (isSubtaskCompleted ? "Completed" : "Not Started")) === s ? "opacity-100" : "opacity-0")} />
+                                                              {s}
+                                                            </CommandItem>
+                                                          ))}
+                                                        </CommandGroup>
+                                                      </CommandList>
+                                                    </Command>
+                                                  </PopoverContent>
+                                                </Popover>
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'progress': return (
+                                            <Fragment key="progress">
+                                              {/* Subtask Progress bar */}
+                                              <td className="px-3 py-0.5 border-r text-center">
+                                                <div className="flex items-center gap-1 w-full justify-center">
+                                                  <Progress value={isSubtaskCompleted ? 100 : (subtask.progress || 0)} className="h-1 bg-slate-100 flex-1" />
+                                                  <span className="text-[9px] font-bold text-slate-500 w-6 shrink-0 text-right">
+                                                    {isSubtaskCompleted ? 100 : (subtask.progress || 0)}%
+                                                  </span>
                                                 </div>
-                                              ) : (
-                                                <span
-                                                  className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-flex items-center gap-1 group/date text-[10px]"
-                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "completionDate", subtask.completionDate || ""); }}
-                                                >
-                                                  {formatDate(subtask.completionDate) || "—"}
-                                                  {subtask.completionDate && (
-                                                    <X
-                                                      size={9}
-                                                      className="text-slate-400 hover:text-red-500 opacity-0 group-hover/date:opacity-100 transition-opacity shrink-0"
-                                                      onClick={(e) => { e.stopPropagation(); handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", ""); }}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'completionDate': return (
+                                            <Fragment key="completionDate">
+                                              {/* Completion Date (inline editable, mirrors task row) */}
+                                              <td className="px-2 py-0.5 text-center border-r font-medium text-slate-700" onClick={(e) => e.stopPropagation()}>
+                                                {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "completionDate" ? (
+                                                  <div className="flex items-center gap-1 justify-center">
+                                                    <Input
+                                                      type="date"
+                                                      lang="en-GB"
+                                                      autoFocus
+                                                      className="h-6 text-[10px] p-0.5"
+                                                      value={tempSubtaskValue}
+                                                      onChange={(e) => setTempSubtaskValue(e.target.value)}
+                                                      onBlur={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", tempSubtaskValue)}
+                                                      onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", tempSubtaskValue);
+                                                        if (e.key === 'Escape') setEditingSubtaskField(null);
+                                                      }}
                                                     />
-                                                  )}
-                                                </span>
-                                              )}
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'durationDays': return (
-                                          <Fragment key="durationDays">
-                                            {/* Duration (Number of Days) — inline editable, mirrors task row */}
-                                            <td className="px-2 py-0.5 text-center border-r font-medium text-slate-700" onClick={(e) => e.stopPropagation()}>
-                                              {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "durationDays" ? (
-                                                <Input
-                                                  type="number"
-                                                  min={0}
-                                                  autoFocus
-                                                  className="h-6 text-[10px] p-0.5 text-center w-14 mx-auto"
-                                                  value={tempSubtaskValue}
-                                                  onChange={(e) => setTempSubtaskValue(e.target.value)}
-                                                  onBlur={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "durationDays", tempSubtaskValue === "" ? null : Number(tempSubtaskValue))}
-                                                  onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') handleInlineSubtaskUpdate(task.id, String(subtask.id), "durationDays", tempSubtaskValue === "" ? null : Number(tempSubtaskValue));
-                                                    if (e.key === 'Escape') setEditingSubtaskField(null);
-                                                  }}
-                                                  title={!subtask.startDate ? "Set a Start Date first so the End Date can be calculated" : undefined}
-                                                />
-                                              ) : (
-                                                <span
-                                                  className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-flex items-center gap-1 text-[10px]"
-                                                  onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "durationDays", typeof subtask.durationDays === 'number' ? String(subtask.durationDays) : ""); }}
-                                                  title={!subtask.startDate ? "Set a Start Date first so the End Date can be calculated" : "Days from Start Date — End Date auto-updates"}
-                                                >
-                                                  {typeof subtask.durationDays === 'number' ? `${subtask.durationDays}d` : "—"}
-                                                </span>
-                                              )}
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        case 'remarks': return (
-                                          <Fragment key="remarks">
-                                            {/* Delayed By (dashed) */}
-                                            <td className="px-3 py-0.5 border-r text-slate-400 text-center">—</td>
-                                          </Fragment>
-                                        );
-                                        case 'flags': return (
-                                          <Fragment key="flags">
-                                            {/* Subtask Flags Column (distinct amber/pink styling from task flags) */}
-                                            <td className="px-3 py-0.5 border-r text-center no-navigate" onClick={(e) => e.stopPropagation()}>
-                                              <Popover>
-                                                <PopoverTrigger asChild>
-                                                  <button className="flex items-center justify-center gap-1 w-full hover:bg-slate-50 py-0.5 rounded transition-colors cursor-pointer min-h-[20px]">
-                                                    {subtask.isAddon && (
-                                                      <span className="text-[8px] font-bold uppercase bg-amber-100 text-amber-700 border border-amber-200 border-dashed px-1 rounded">Addon</span>
+                                                    {tempSubtaskValue && (
+                                                      <button
+                                                        type="button"
+                                                        title="Clear date"
+                                                        className="text-slate-400 hover:text-red-500 shrink-0"
+                                                        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setTempSubtaskValue(""); handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", ""); }}
+                                                      >
+                                                        <X size={10} />
+                                                      </button>
                                                     )}
-                                                    {subtask.isIssue && (
-                                                      <span className="text-[8px] font-bold uppercase bg-pink-100 text-pink-700 border border-pink-200 border-dashed px-1 rounded flex items-center gap-0.5">
-                                                        <AlertTriangle size={7} /> Issue
-                                                      </span>
+                                                  </div>
+                                                ) : (
+                                                  <span
+                                                    className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-flex items-center gap-1 group/date text-[10px]"
+                                                    onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "completionDate", subtask.completionDate || ""); }}
+                                                  >
+                                                    {formatDate(subtask.completionDate) || "—"}
+                                                    {subtask.completionDate && (
+                                                      <X
+                                                        size={9}
+                                                        className="text-slate-400 hover:text-red-500 opacity-0 group-hover/date:opacity-100 transition-opacity shrink-0"
+                                                        onClick={(e) => { e.stopPropagation(); handleInlineSubtaskUpdate(task.id, String(subtask.id), "completionDate", ""); }}
+                                                      />
                                                     )}
-                                                    {!subtask.isAddon && !subtask.isIssue && <span className="text-slate-300 text-[9px]">—</span>}
-                                                  </button>
-                                                </PopoverTrigger>
-                                                <PopoverContent className="w-48 p-0" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
-                                                  <Command>
-                                                    <CommandList>
-                                                      <CommandGroup>
-                                                        <CommandItem onSelect={() => toggleSubtaskFlag(task.id, String(subtask.id), 'isAddon', !subtask.isAddon)} className="cursor-pointer">
-                                                          <Check className={cn("mr-2 h-4 w-4", subtask.isAddon ? "opacity-100" : "opacity-0")} />
-                                                          <span className="text-amber-700 font-semibold">Mark as Add-on</span>
-                                                        </CommandItem>
-                                                        <CommandItem onSelect={() => toggleSubtaskFlag(task.id, String(subtask.id), 'isIssue', !subtask.isIssue)} className="cursor-pointer">
-                                                          <Check className={cn("mr-2 h-4 w-4", subtask.isIssue ? "opacity-100" : "opacity-0")} />
-                                                          <span className="text-pink-700 font-semibold flex items-center gap-1"><AlertTriangle size={12} /> Mark as Issue</span>
-                                                        </CommandItem>
-                                                      </CommandGroup>
-                                                    </CommandList>
-                                                  </Command>
-                                                </PopoverContent>
-                                              </Popover>
-                                            </td>
-                                          </Fragment>
-                                        );
-                                        default: return null;
-                                      }
-                                    })}
-                                    {/* Subtask actions (delete/clone) */}
-                                    <td className="w-[210px] min-w-[210px] max-w-[210px] px-2 py-0.5 text-center">
-                                      <div className="flex items-center justify-center gap-1">
-                                        <Button
-                                          size="icon"
-                                          variant="ghost"
-                                          className="h-5 w-5 text-green-600 hover:text-green-755"
-                                          onClick={() => {
-                                            setCloneSubtaskData({ id: subtask.id!, title: subtask.title });
-                                            setCloneSubtaskNewTitle(`${subtask.title} (Copy)`);
-                                            setCloneSubtaskOpen(true);
-                                          }}
-                                          title="Clone Subtask"
-                                        >
-                                          <Copy size={10} />
-                                        </Button>
-                                        <Button
-                                          size="icon"
-                                          variant="ghost"
-                                          className="h-5 w-5 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
-                                          onClick={() => {
-                                            const proj = projects.find(p => String(p.id) === String(task.projectId));
-                                            const projectTitle = proj?.title || "";
-                                            const keyStep = keySteps.find(k => String(k.id) === String(task.keyStepId));
-                                            const keyStepTitle = keyStep?.title || "";
-                                            const params = new URLSearchParams();
-                                            if (task.projectId) params.set("projectId", String(task.projectId));
-                                            if (projectTitle) params.set("projectTitle", String(projectTitle));
-                                            if (task.keyStepId) params.set("keyStepId", String(task.keyStepId));
-                                            if (keyStepTitle) params.set("keyStepTitle", String(keyStepTitle));
-                                            if (task.id) params.set("taskId", String(task.id));
-                                            if (task.taskName) params.set("taskName", String(task.taskName));
-                                            if (subtask.id) params.set("subtaskId", String(subtask.id));
-                                            if (subtask.title) params.set("subtaskName", String(subtask.title));
-                                            navigate(`/discussion?${params.toString()}`);
-                                          }}
-                                          title="Discuss Subtask"
-                                        >
-                                          <MessageSquare size={10} />
-                                        </Button>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
+                                                  </span>
+                                                )}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'durationDays': return (
+                                            <Fragment key="durationDays">
+                                              {/* Duration (Number of Days) — inline editable, mirrors task row */}
+                                              <td className="px-2 py-0.5 text-center border-r font-medium text-slate-700" onClick={(e) => e.stopPropagation()}>
+                                                {editingSubtaskField?.subtaskId === subtask.id && editingSubtaskField?.field === "durationDays" ? (
+                                                  <Input
+                                                    type="number"
+                                                    min={0}
+                                                    autoFocus
+                                                    className="h-6 text-[10px] p-0.5 text-center w-14 mx-auto"
+                                                    value={tempSubtaskValue}
+                                                    onChange={(e) => setTempSubtaskValue(e.target.value)}
+                                                    onBlur={() => handleInlineSubtaskUpdate(task.id, String(subtask.id), "durationDays", tempSubtaskValue === "" ? null : Number(tempSubtaskValue))}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === 'Enter') handleInlineSubtaskUpdate(task.id, String(subtask.id), "durationDays", tempSubtaskValue === "" ? null : Number(tempSubtaskValue));
+                                                      if (e.key === 'Escape') setEditingSubtaskField(null);
+                                                    }}
+                                                    title={!subtask.startDate ? "Set a Start Date first so the End Date can be calculated" : undefined}
+                                                  />
+                                                ) : (
+                                                  <span
+                                                    className="cursor-pointer hover:bg-slate-100 p-0.5 rounded inline-flex items-center gap-1 text-[10px]"
+                                                    onClick={(e) => { e.stopPropagation(); startEditingSubtask(String(subtask.id), "durationDays", typeof subtask.durationDays === 'number' ? String(subtask.durationDays) : ""); }}
+                                                    title={!subtask.startDate ? "Set a Start Date first so the End Date can be calculated" : "Days from Start Date — End Date auto-updates"}
+                                                  >
+                                                    {typeof subtask.durationDays === 'number' ? `${subtask.durationDays}d` : "—"}
+                                                  </span>
+                                                )}
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          case 'remarks': return (
+                                            <Fragment key="remarks">
+                                              {/* Delayed By (dashed) */}
+                                              <td className="px-3 py-0.5 border-r text-slate-400 text-center">—</td>
+                                            </Fragment>
+                                          );
+                                          case 'flags': return (
+                                            <Fragment key="flags">
+                                              {/* Subtask Flags Column (distinct amber/pink styling from task flags) */}
+                                              <td className="px-3 py-0.5 border-r text-center no-navigate" onClick={(e) => e.stopPropagation()}>
+                                                <Popover>
+                                                  <PopoverTrigger asChild>
+                                                    <button className="flex items-center justify-center gap-1 w-full hover:bg-slate-50 py-0.5 rounded transition-colors cursor-pointer min-h-[20px]">
+                                                      {subtask.isAddon && (
+                                                        <span className="text-[8px] font-bold uppercase bg-amber-100 text-amber-700 border border-amber-200 border-dashed px-1 rounded">Addon</span>
+                                                      )}
+                                                      {subtask.isIssue && (
+                                                        <span className="text-[8px] font-bold uppercase bg-pink-100 text-pink-700 border border-pink-200 border-dashed px-1 rounded flex items-center gap-0.5">
+                                                          <AlertTriangle size={7} /> Issue
+                                                        </span>
+                                                      )}
+                                                      {!subtask.isAddon && !subtask.isIssue && <span className="text-slate-300 text-[9px]">—</span>}
+                                                    </button>
+                                                  </PopoverTrigger>
+                                                  <PopoverContent className="w-48 p-0" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
+                                                    <Command>
+                                                      <CommandList>
+                                                        <CommandGroup>
+                                                          <CommandItem onSelect={() => toggleSubtaskFlag(task.id, String(subtask.id), 'isAddon', !subtask.isAddon)} className="cursor-pointer">
+                                                            <Check className={cn("mr-2 h-4 w-4", subtask.isAddon ? "opacity-100" : "opacity-0")} />
+                                                            <span className="text-amber-700 font-semibold">Mark as Add-on</span>
+                                                          </CommandItem>
+                                                          <CommandItem onSelect={() => toggleSubtaskFlag(task.id, String(subtask.id), 'isIssue', !subtask.isIssue)} className="cursor-pointer">
+                                                            <Check className={cn("mr-2 h-4 w-4", subtask.isIssue ? "opacity-100" : "opacity-0")} />
+                                                            <span className="text-pink-700 font-semibold flex items-center gap-1"><AlertTriangle size={12} /> Mark as Issue</span>
+                                                          </CommandItem>
+                                                        </CommandGroup>
+                                                      </CommandList>
+                                                    </Command>
+                                                  </PopoverContent>
+                                                </Popover>
+                                              </td>
+                                            </Fragment>
+                                          );
+                                          default: return null;
+                                        }
+                                      })}
+                                      {/* Subtask actions (delete/clone) */}
+                                      <td className="w-[210px] min-w-[210px] max-w-[210px] px-2 py-0.5 text-center">
+                                        <div className="flex items-center justify-center gap-1">
+                                          <Button
+                                            size="icon"
+                                            variant="ghost"
+                                            className="h-5 w-5 text-green-600 hover:text-green-755"
+                                            onClick={() => {
+                                              setCloneSubtaskData({ id: subtask.id!, title: subtask.title });
+                                              setCloneSubtaskNewTitle(`${subtask.title} (Copy)`);
+                                              setCloneSubtaskOpen(true);
+                                            }}
+                                            title="Clone Subtask"
+                                          >
+                                            <Copy size={10} />
+                                          </Button>
+                                          <Button
+                                            size="icon"
+                                            variant="ghost"
+                                            className="h-5 w-5 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                            onClick={() => {
+                                              const proj = projects.find(p => String(p.id) === String(task.projectId));
+                                              const projectTitle = proj?.title || "";
+                                              const keyStep = keySteps.find(k => String(k.id) === String(task.keyStepId));
+                                              const keyStepTitle = keyStep?.title || "";
+                                              const params = new URLSearchParams();
+                                              if (task.projectId) params.set("projectId", String(task.projectId));
+                                              if (projectTitle) params.set("projectTitle", String(projectTitle));
+                                              if (task.keyStepId) params.set("keyStepId", String(task.keyStepId));
+                                              if (keyStepTitle) params.set("keyStepTitle", String(keyStepTitle));
+                                              if (task.id) params.set("taskId", String(task.id));
+                                              if (task.taskName) params.set("taskName", String(task.taskName));
+                                              if (subtask.id) params.set("subtaskId", String(subtask.id));
+                                              if (subtask.title) params.set("subtaskName", String(subtask.title));
+                                              navigate(`/discussion?${params.toString()}`);
+                                            }}
+                                            title="Discuss Subtask"
+                                          >
+                                            <MessageSquare size={10} />
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                              })()}
 
                               {/* 3. INLINE FAST SUBTASK CREATION ROW (shown for expanded task) */}
                               <tr className="bg-blue-50/10 border-b border-slate-100 text-[11px] h-8">

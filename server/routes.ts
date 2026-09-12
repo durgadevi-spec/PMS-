@@ -231,7 +231,11 @@ export async function registerRoutes(
           sql`${tickets.participants}::jsonb @> ${JSON.stringify([empId])}::jsonb`
         ));
       }
-      if (status) conditions.push(eq(tickets.status, status as string));
+      if (status) {
+        conditions.push(eq(tickets.status, status as string));
+      } else {
+        conditions.push(ne(tickets.status, "Draft"));
+      }
       if (priority) conditions.push(eq(tickets.priority, priority as string));
       if (category) conditions.push(eq(tickets.category, category as string));
 
@@ -301,9 +305,9 @@ export async function registerRoutes(
 
       const insertData = {
         ticketCode,
-        title,
-        description,
-        category,
+        title: title || "(Draft)",
+        description: description || "",
+        category: category || "Other",
         priority: priority || "Medium",
         department: department || "General",
         projectId: (projectId && projectId !== "none") ? projectId : null,
@@ -313,7 +317,7 @@ export async function registerRoutes(
         assignedTo: assignedTo || null,
         completedLines: Array.isArray(completedLines) ? completedLines : [],
         createdBy: empId,
-        status: "Open"
+        status: req.body.status || "Open"
       };
 
       debug("[TICKETS-TRACE] Attempting database insert:", JSON.stringify(insertData, null, 2));
@@ -342,6 +346,11 @@ export async function registerRoutes(
       }
 
       res.status(201).json(ticket);
+
+      if (insertData.status === "Draft") {
+        debug("[TICKETS-TRACE] Skipping email notification for Draft ticket.");
+        return;
+      }
 
       // --- SEND EMAIL NOTIFICATION (ASYNC) ---
       (async () => {
@@ -626,7 +635,7 @@ export async function registerRoutes(
       const updateData: any = { updatedAt: new Date() };
       if (status !== undefined) updateData.status = status;
       if (priority !== undefined) updateData.priority = priority;
-      if (assignedTo !== undefined) updateData.assignedTo = assignedTo;
+      if (assignedTo !== undefined) updateData.assignedTo = assignedTo || null;
       if (title !== undefined) updateData.title = title;
       if (description !== undefined) updateData.description = description;
       if (category !== undefined) updateData.category = category;
@@ -635,7 +644,12 @@ export async function registerRoutes(
       if (participants !== undefined) updateData.participants = participants;
       if (completedLines !== undefined) updateData.completedLines = completedLines;
       if (req.body.taskId !== undefined) updateData.taskId = req.body.taskId;
-      if (req.body.projectId !== undefined) updateData.projectId = req.body.projectId;
+      if (req.body.projectId !== undefined) {
+        // uuid column — an empty string (or the "none" sentinel) is not a
+        // valid uuid and throws "invalid input syntax for type uuid", so
+        // normalize to null the same way POST /api/tickets already does.
+        updateData.projectId = (req.body.projectId && req.body.projectId !== "none") ? req.body.projectId : null;
+      }
 
       // Save close reason and requester when status is Pending Closure
       if (status === "Pending Closure") {
@@ -654,6 +668,11 @@ export async function registerRoutes(
         .returning();
 
       res.json(updatedTicket);
+
+      if (updatedTicket.status === "Draft") {
+        debug(`[TICKETS-UPDATE-TRACE] Skipping email notification for Draft ticket ${updatedTicket.id}.`);
+        return;
+      }
 
       // ASYNC EMAIL NOTIFICATION
       try {
@@ -3926,6 +3945,10 @@ export async function registerRoutes(
           assignedTo: Array.isArray(st.assignedTo) && st.assignedTo.length > 0
             ? st.assignedTo[0]
             : (typeof st.assignedTo === 'string' ? st.assignedTo : null),
+          // startDate/endDate: mirrors the PUT /api/tasks/:id handler below so
+          // subtask dates persist from the very first save, not just on edit.
+          startDate: st.startDate || null,
+          endDate: st.endDate || null,
           taskOwnerId: st.taskOwnerId || null,
           priority: st.priority || "medium",
           status: st.status || (st.isCompleted ? "Completed" : "Not Started"),
@@ -3952,6 +3975,25 @@ export async function registerRoutes(
           }
         } catch (err) {
           console.warn("Failed to insert subtask_members mapping:", err);
+        }
+
+        // Subtask tags (mirrors task tags): purely additive — only runs when
+        // a subtask carries tagIds, and reuses the existing subtask_tags
+        // join table / assignTagsToSubtask helper already used elsewhere.
+        try {
+          const tagInserts: { subtaskId: string; tagId: string }[] = [];
+          inserted.forEach((ins: any, idx: number) => {
+            const incoming = incomingSubtasks[idx];
+            if (Array.isArray(incoming?.tagIds) && incoming.tagIds.length > 0) {
+              incoming.tagIds.forEach((tagId: string) => tagInserts.push({ subtaskId: ins.id, tagId }));
+            }
+          });
+          if (tagInserts.length > 0) {
+            await db.insert(subtaskTags).values(tagInserts);
+            debug("✅ Subtask tags inserted:", tagInserts.length);
+          }
+        } catch (err) {
+          console.warn("Failed to insert subtask_tags mapping:", err);
         }
 
         debug("✅ Subtasks inserted:", inserted.length);
@@ -4288,6 +4330,25 @@ export async function registerRoutes(
           }
         } catch (err) {
           console.warn("Failed to insert subtask_members mapping:", err);
+        }
+
+        // Subtask tags (mirrors task tags): the subtasks were just
+        // recreated above (old rows deleted, which cascades subtask_tags),
+        // so re-insert any tagIds provided per subtask. Purely additive —
+        // no-op for subtasks that don't carry tagIds.
+        try {
+          const tagInserts: { subtaskId: string; tagId: string }[] = [];
+          inserted.forEach((ins: any, idx: number) => {
+            const incoming = incomingSubtasks[idx];
+            if (Array.isArray(incoming?.tagIds) && incoming.tagIds.length > 0) {
+              incoming.tagIds.forEach((tagId: string) => tagInserts.push({ subtaskId: ins.id, tagId }));
+            }
+          });
+          if (tagInserts.length > 0) {
+            await db.insert(subtaskTags).values(tagInserts);
+          }
+        } catch (err) {
+          console.warn("Failed to insert subtask_tags mapping:", err);
         }
 
         console.log("✅ Subtasks inserted:", inserted.length);
@@ -5577,6 +5638,63 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Bulk key step error:", err);
       res.status(500).json({ error: "Bulk key step assignment failed" });
+    }
+  });
+
+  // BULK UPDATE STATUS FOR TASKS
+  app.post("/api/tasks/bulk-update-status", requireAuth, async (req: any, res) => {
+    try {
+      const { taskIds, status } = req.body;
+      if (!Array.isArray(taskIds) || taskIds.length === 0) {
+        return res.status(400).json({ error: "taskIds (non-empty array) is required" });
+      }
+      if (!status) {
+        return res.status(400).json({ error: "status is required" });
+      }
+
+      const statusLower = String(status).toLowerCase();
+      const isCompleted = statusLower === "completed";
+      const isCancelled = statusLower === "cancelled";
+
+      const updateData: any = {
+        status,
+        updatedAt: new Date()
+      };
+
+      if (isCompleted) {
+        updateData.progress = 100;
+        updateData.completedAt = new Date();
+        updateData.completionDate = updateData.completedAt;
+      } else if (!isCancelled) {
+        // Moving to any active (non-completed, non-cancelled) status clears
+        // completion info, matching the single-task "reopen" behavior.
+        updateData.completedAt = null;
+        updateData.completionDate = null;
+      }
+
+      await db.update(projectTasks)
+        .set(updateData)
+        .where(inArray(projectTasks.id, taskIds));
+
+      if (isCancelled) {
+        await db.update(subtasks)
+          .set({ status: "Cancelled" })
+          .where(
+            and(
+              inArray(subtasks.taskId, taskIds),
+              eq(subtasks.isCompleted, false)
+            )
+          );
+      } else if (!isCompleted) {
+        await db.update(subtasks)
+          .set({ isCompleted: false, progress: 0 })
+          .where(inArray(subtasks.taskId, taskIds));
+      }
+
+      res.json({ success: true, message: `Status updated for ${taskIds.length} task(s)` });
+    } catch (err) {
+      console.error("Bulk status update error:", err);
+      res.status(500).json({ error: "Bulk status update failed" });
     }
   });
 

@@ -115,6 +115,7 @@ interface TicketData {
   department: string;
   projectId?: string;
   projectName?: string;
+  manualProject?: string;
   createdBy: string;
   createdByName: string;
   assignedTo?: string;
@@ -457,6 +458,83 @@ function RaiseTicketForm({
     completedLines: (isClone ? [] : initialData?.completedLines) || [] as number[],
   });
 
+  const [draftId, setDraftId] = useState<string | null>(initialData?.status === "Draft" ? initialData.id : null);
+
+  // Load existing draft on mount if creating new ticket
+  useEffect(() => {
+    if (!initialData && !isClone) {
+      apiFetch("/api/tickets?status=Draft")
+        .then(res => res.json())
+        .then((drafts: TicketData[]) => {
+          if (drafts.length > 0) {
+            const draft = drafts[0]; // grab the most recent one
+            setDraftId(draft.id);
+            setFormData({
+              title: draft.title === "(Draft)" ? "" : draft.title,
+              description: draft.description,
+              category: draft.category,
+              priority: draft.priority,
+              department: draft.department,
+              projectId: draft.projectId || "",
+              manualProject: draft.manualProject || "",
+              companyName: draft.companyName || "",
+              participants: draft.participants || [],
+              assignedTo: draft.assignedTo || "",
+              completedLines: draft.completedLines || [],
+            });
+            toast({ title: "Draft Restored", description: "Your previous unsaved ticket has been restored." });
+          }
+        })
+        .catch(console.error);
+    }
+  }, [initialData, isClone, toast]);
+
+  // Auto-save effect for drafts
+  useEffect(() => {
+    // Only auto-save if we are not editing an existing submitted ticket
+    if (initialData?.id && !isClone && initialData.status !== "Draft") return;
+    if (isSubmitting) return;
+
+    // don't auto-save if totally empty initially
+    if (!formData.title && !formData.description && !draftId) return;
+
+    const timeout = setTimeout(async () => {
+      try {
+        const payload = {
+          ...formData,
+          status: "Draft",
+          // project_id / assigned_to are uuid columns in Postgres — an empty
+          // string (the default "no selection" value) fails with
+          // "invalid input syntax for type uuid", so send null instead.
+          projectId: formData.projectId || null,
+          assignedTo: formData.assignedTo || null,
+        };
+        if (draftId || (initialData?.id && initialData.status === "Draft")) {
+          const idToUpdate = draftId || initialData!.id;
+          await apiFetch(`/api/tickets/${idToUpdate}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+        } else {
+          const res = await apiFetch("/api/tickets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (res.ok) {
+            const newTicket = await res.json();
+            setDraftId(newTicket.id);
+          }
+        }
+      } catch (e) {
+        console.error("Auto-save failed", e);
+      }
+    }, 1500);
+
+    return () => clearTimeout(timeout);
+  }, [formData, draftId, initialData, isClone, isSubmitting]);
+
   const filteredAndSortedProjects = useMemo(() => {
     if (!projects || projects.length === 0) return [];
 
@@ -659,13 +737,20 @@ function RaiseTicketForm({
         }
       }
 
-      const url = (initialData?.id && !isClone) ? `/api/tickets/${initialData.id}` : "/api/tickets";
-      const method = (initialData?.id && !isClone) ? "PATCH" : "POST";
+      const targetId = draftId || (initialData?.id && !isClone ? initialData.id : null);
+      const isDraftUpdate = draftId || (initialData?.status === "Draft");
+      const url = targetId ? `/api/tickets/${targetId}` : "/api/tickets";
+      const method = targetId ? "PATCH" : "POST";
+
+      const finalPayload = { ...data, attachments };
+      if (isDraftUpdate || !targetId) {
+        finalPayload.status = "Open";
+      }
 
       const res = await apiFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, attachments }),
+        body: JSON.stringify(finalPayload),
       });
       if (!res.ok) throw new Error("Failed to process ticket");
       return res.json();
@@ -805,15 +890,15 @@ function RaiseTicketForm({
                 Description {useTextarea ? "" : "(checklist — press Enter for a new item, or dictate with voice)"}
               </Label>
               <div className="flex items-center gap-2">
-                <Checkbox 
-                  id="description-mode-toggle" 
-                  checked={useTextarea} 
-                  onCheckedChange={(c) => setUseTextarea(!!c)} 
+                <Checkbox
+                  id="description-mode-toggle"
+                  checked={useTextarea}
+                  onCheckedChange={(c) => setUseTextarea(!!c)}
                 />
                 <Label htmlFor="description-mode-toggle" className="text-xs text-muted-foreground font-normal cursor-pointer">Use Text Area</Label>
               </div>
             </div>
-            
+
             {useTextarea ? (
               <Textarea
                 value={formData.description}
@@ -827,57 +912,57 @@ function RaiseTicketForm({
                 className="rounded-lg border border-primary/10 shadow-inner bg-background/50 max-h-[300px] overflow-y-auto px-2 py-1.5"
               >
                 {descLines.map((line, index) => {
-                const isChecked = Array.isArray(formData.completedLines) && formData.completedLines.includes(index);
-                return (
-                  <div key={index} className="group flex items-center gap-2 py-1">
-                    <GripVertical className="h-4 w-4 text-muted-foreground/25 shrink-0" />
-                    <Checkbox
-                      checked={isChecked}
-                      onCheckedChange={() => toggleFormLine(index)}
-                      className="shrink-0"
-                    />
-                    <input
-                      ref={el => { itemRefs.current[index] = el; }}
-                      value={line}
-                      placeholder={index === 0 && descLines.length === 1 ? "List item… speak now or start typing" : "List item"}
-                      onChange={e => updateLineText(index, e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          insertLineAfter(index);
-                        } else if (e.key === "Backspace" && line === "" && descLines.length > 1) {
-                          e.preventDefault();
-                          removeLine(index);
-                        }
-                      }}
-                      className={`flex-1 min-w-0 bg-transparent border-none outline-none text-sm py-0.5 font-medium ${isChecked ? 'line-through text-muted-foreground' : ''}`}
-                    />
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      onClick={() => removeLine(index)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                );
-              })}
-              <button
-                type="button"
-                onClick={addTrailingItem}
-                className="flex items-center gap-2 py-1.5 pl-[3.375rem] text-sm text-muted-foreground hover:text-foreground transition-colors w-full text-left"
-              >
-                <Plus className="h-4 w-4 -ml-[1.625rem]" /> List item
-              </button>
-            </div>
+                  const isChecked = Array.isArray(formData.completedLines) && formData.completedLines.includes(index);
+                  return (
+                    <div key={index} className="group flex items-center gap-2 py-1">
+                      <GripVertical className="h-4 w-4 text-muted-foreground/25 shrink-0" />
+                      <Checkbox
+                        checked={isChecked}
+                        onCheckedChange={() => toggleFormLine(index)}
+                        className="shrink-0"
+                      />
+                      <input
+                        ref={el => { itemRefs.current[index] = el; }}
+                        value={line}
+                        placeholder={index === 0 && descLines.length === 1 ? "List item… speak now or start typing" : "List item"}
+                        onChange={e => updateLineText(index, e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            insertLineAfter(index);
+                          } else if (e.key === "Backspace" && line === "" && descLines.length > 1) {
+                            e.preventDefault();
+                            removeLine(index);
+                          }
+                        }}
+                        className={`flex-1 min-w-0 bg-transparent border-none outline-none text-sm py-0.5 font-medium ${isChecked ? 'line-through text-muted-foreground' : ''}`}
+                      />
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        onClick={() => removeLine(index)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={addTrailingItem}
+                  className="flex items-center gap-2 py-1.5 pl-[3.375rem] text-sm text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+                >
+                  <Plus className="h-4 w-4 -ml-[1.625rem]" /> List item
+                </button>
+              </div>
             )}
             <div className="flex items-center justify-between px-1">
               <p className="text-[10px] text-muted-foreground italic">
                 {isRecording
                   ? (interimTranscription ? `Listening: ${interimTranscription}…` : "Transcription active... keep speaking.")
-                  : useTextarea 
-                    ? "Type your description or use the mic above." 
+                  : useTextarea
+                    ? "Type your description or use the mic above."
                     : "Tick items off, press Enter for a new checkbox, or use the mic above."}
               </p>
               {formData.description && (

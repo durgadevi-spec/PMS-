@@ -1,9 +1,3 @@
-import { useState } from "react";
-import { CalendarIcon } from "lucide-react";
-import { format, parseISO, isValid } from "date-fns";
-import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 interface DateFieldProps {
@@ -16,89 +10,35 @@ interface DateFieldProps {
     min?: string;
     className?: string;
     disabled?: boolean;
-    /** Show a small "Clear" action in the calendar popover footer. */
     clearable?: boolean;
-    /** Open the calendar popover as soon as this field mounts (used for inline table-cell editing). */
     defaultOpen?: boolean;
-    /** Notified whenever the popover opens/closes — e.g. to exit an inline "editing" state on close. */
     onOpenChange?: (open: boolean) => void;
+    calendarSize?: "default" | "lg";
+    popoverSide?: "top" | "bottom" | "left" | "right";
+    popoverAlign?: "start" | "center" | "end";
 }
 
 /**
- * A date field that always displays and accepts dates in DD/MM/YYYY order,
- * regardless of the browser's or OS's locale settings. Native
- * `<input type="date">` elements render their text using the browser/OS
- * locale (often MM/DD/YYYY in the US, even when `lang="en-GB"` is set on
- * some browsers), so we render our own trigger + calendar dropdown instead
- * and only use `yyyy-MM-dd` internally for storage/API compatibility.
+ * A native date field that uses the browser's built-in date picker.
  */
 export default function DateField({
     value,
     onChange,
-    placeholder = "dd/mm/yyyy",
     min,
     className,
     disabled,
-    clearable,
-    defaultOpen,
-    onOpenChange,
 }: DateFieldProps) {
-    const [open, setOpen] = useState(!!defaultOpen);
-    const handleOpenChange = (o: boolean) => {
-        setOpen(o);
-        onOpenChange?.(o);
-    };
-
-    const parsed = value ? parseISO(value) : undefined;
-    const displayDate = parsed && isValid(parsed) ? format(parsed, "dd/MM/yyyy") : "";
-    const minDate = min ? parseISO(min) : undefined;
-    const hasValidMin = !!(minDate && isValid(minDate));
-
     return (
-        <Popover open={open} onOpenChange={handleOpenChange}>
-            <PopoverTrigger asChild>
-                <Button
-                    type="button"
-                    variant="outline"
-                    disabled={disabled}
-                    className={cn("w-full h-10 justify-between font-normal px-3", className)}
-                >
-                    <span className={displayDate ? "text-foreground" : "text-muted-foreground"}>
-                        {displayDate || placeholder}
-                    </span>
-                    <CalendarIcon className="h-4 w-4 opacity-50 shrink-0" />
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
-                <Calendar
-                    mode="single"
-                    captionLayout="dropdown"
-                    selected={parsed && isValid(parsed) ? parsed : undefined}
-                    disabled={hasValidMin ? { before: minDate as Date } : undefined}
-                    onSelect={(date) => {
-                        if (date) {
-                            onChange(format(date, "yyyy-MM-dd"));
-                            handleOpenChange(false);
-                        }
-                    }}
-                />
-                {clearable && value && (
-                    <div className="border-t p-2">
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="w-full text-xs text-slate-500 hover:text-red-600"
-                            onClick={() => {
-                                onChange("");
-                                handleOpenChange(false);
-                            }}
-                        >
-                            Clear date
-                        </Button>
-                    </div>
-                )}
-            </PopoverContent>
-        </Popover>
+        <input
+            type="date"
+            value={value || ""}
+            min={min || undefined}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={disabled}
+            className={cn(
+                "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                className
+            )}
+        />
     );
 }
