@@ -552,7 +552,7 @@ function ManageTagsDialog({ allTags, setAllTags, setTasks }: { allTags: any[], s
         <Button
           variant="outline"
           size="sm"
-          className="h-9 px-3 min-w-[110px] justify-center gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
+          className="h-8 px-2.5 gap-1.5 text-xs border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
         >
           <Settings2 size={14} className="text-slate-500" />
           <span className="hidden sm:inline">Manage Tags</span>
@@ -4667,9 +4667,9 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               onClick={openAdd}
-              className="h-9 px-3 min-w-[110px] justify-center bg-blue-600 hover:bg-blue-700 hover:shadow-md text-white shadow-sm transition-all duration-150"
+              className="h-9 px-2.5 gap-1 text-sm bg-blue-600 hover:bg-blue-700 hover:shadow-md text-white shadow-sm transition-all duration-150"
             >
-              <Plus className="h-4 w-4 mr-1" /> Add Task
+              <Plus className="h-3.5 w-3.5" /> Add Task
             </Button>
 
             <TaskFilters
@@ -4739,14 +4739,14 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
-                  className="h-9 px-3 min-w-[110px] justify-center gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
+                  className="h-9 px-2.5 gap-1 text-sm border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
                 >
-                  <SlidersHorizontal className="h-4 w-4" /> Advanced Options
+                  <SlidersHorizontal className="h-3.5 w-3.5" /> Advanced Options
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 max-h-[60vh] overflow-y-auto" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+              <PopoverContent className="w-auto p-3 max-h-[60vh] overflow-y-auto" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Actions</p>
-                <div className="flex flex-col items-stretch gap-1.5">
+                <div className="flex flex-col items-stretch gap-1.5 w-[150px]">
                   <Button
                     onClick={() => setQuickAddTaskOpen(true)}
                     variant="outline"
@@ -4754,10 +4754,10 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                   >
                     <Plus className="h-3.5 w-3.5 mr-1" /> Quick Add
                   </Button>
-                  <div className="w-full [&>button]:w-full [&>button]:justify-start">
+                  <div className="[&>button]:w-full [&>button]:justify-start">
                     <ManageColumns columns={columnsConfig} setColumns={setColumnsConfig} defaultColumns={defaultColumns} onSave={handleSaveColumns} />
                   </div>
-                  <div className="w-full [&>button]:w-full [&>button]:justify-start">
+                  <div className="[&>button]:w-full [&>button]:justify-start">
                     <ManageTagsDialog allTags={allTags} setAllTags={setAllTags} />
                   </div>
                   {/* Collapse/Expand All — kept directly below Manage Tags, on its

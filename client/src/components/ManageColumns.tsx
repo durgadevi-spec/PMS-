@@ -76,7 +76,7 @@ export function ManageColumns({
                 <Button
                     variant="outline"
                     size="sm"
-                    className="h-9 px-3 min-w-[110px] justify-center gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
+                    className="h-8 px-2.5 gap-1.5 text-xs border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
                 >
                     <Settings2 size={14} className="text-slate-500" />
                     <span className="hidden sm:inline">Manage Columns</span>

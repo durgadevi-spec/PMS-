@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/components/Layout";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronLeft, Plus, Trash2, CheckCircle2, Circle, Check, ChevronsUpDown, Eye } from "lucide-react";
+import { ChevronLeft, Plus, Trash2, CheckCircle2, Circle, Check, ChevronsUpDown, Eye, SlidersHorizontal } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/apiClient";
 import {
   Select,
@@ -44,6 +45,7 @@ export default function AddEditTask() {
 
   const [employees, setEmployees] = useState<any[]>([]);
   const [allEmployees, setAllEmployees] = useState<any[]>([]);
+  const [advancedTaskOptionsOpen, setAdvancedTaskOptionsOpen] = useState(false);
   const [allTags, setAllTags] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
   const [keySteps, setKeySteps] = useState<any[]>([]);
@@ -1018,8 +1020,8 @@ export default function AddEditTask() {
               </div>
             </div>
 
-            {/* Row 2: Assigned By, Task Owner & Assignees */}
-            <div className="grid grid-cols-3 gap-6">
+            {/* Row 2: Assigned By & Task Owner */}
+            <div className="grid grid-cols-2 gap-6">
               <div>
                 <Label className="text-sm font-semibold mb-2 block">Assigned By *</Label>
                 <Select
@@ -1066,7 +1068,10 @@ export default function AddEditTask() {
                 </Select>
                 <p className="text-xs text-amber-600 mt-1">Owner is accountable for this task's completion</p>
               </div>
+            </div>
 
+            {/* Row 3: Assignees */}
+            <div>
               <div>
                 <Label className="text-sm font-semibold mb-2 block">Assignees (multiple)</Label>
                 <div className="flex flex-col gap-2">
@@ -1118,150 +1123,173 @@ export default function AddEditTask() {
               </div>
             </div>
 
-            {/* Key Step & Task Name */}
-            <div className="grid grid-cols-[1fr_2fr] gap-6">
-              <div>
-                <Label className="text-sm font-semibold mb-2 block">Key Step *</Label>
-                <Select
-                  value={form.keyStepId || "none"}
-                  onValueChange={(v) => setForm((f) => ({ ...f, keyStepId: v === "none" ? "" : v }))}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue placeholder="Select Key Step" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-64 overflow-y-auto">
-                    <SelectItem value="none">Select Key Step...</SelectItem>
-                    {keySteps.map((m) => (
-                      <SelectItem key={m.id} value={String(m.id)}>
-                        {m.title}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            {/* Key Step */}
+            <div>
+              <Label className="text-sm font-semibold mb-2 block">Key Step *</Label>
+              <Select
+                value={form.keyStepId || "none"}
+                onValueChange={(v) => setForm((f) => ({ ...f, keyStepId: v === "none" ? "" : v }))}
+              >
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder="Select Key Step" />
+                </SelectTrigger>
+                <SelectContent className="max-h-64 overflow-y-auto">
+                  <SelectItem value="none">Select Key Step...</SelectItem>
+                  {keySteps.map((m) => (
+                    <SelectItem key={m.id} value={String(m.id)}>
+                      {m.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-              <div>
-                <Label className="text-sm font-semibold mb-2 block">Task Name *</Label>
-                <Input
-                  ref={taskNameInputRef}
-                  value={form.taskName}
-                  onChange={(e) => setForm((f) => ({ ...f, taskName: e.target.value }))}
-                  placeholder="Enter task name"
-                  className="h-10"
-                />
-              </div>
+            {/* Task Name */}
+            <div>
+              <Label className="text-sm font-semibold mb-2 block">Task Name *</Label>
+              <Input
+                ref={taskNameInputRef}
+                value={form.taskName}
+                onChange={(e) => setForm((f) => ({ ...f, taskName: e.target.value }))}
+                placeholder="Enter task name"
+                className="h-10"
+              />
             </div>
 
             <div>
-              <Label className="text-sm font-semibold mb-2 block">Description</Label>
+              <div className="flex items-center justify-between mb-2">
+                <Label className="text-sm font-semibold block">Description</Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => setAdvancedTaskOptionsOpen((v) => !v)}
+                      className={cn(
+                        "h-7 w-7 flex items-center justify-center rounded-md border transition-colors",
+                        advancedTaskOptionsOpen
+                          ? "bg-primary/10 border-primary/30 text-primary"
+                          : "border-slate-200 text-slate-500 hover:bg-slate-50 hover:border-slate-300"
+                      )}
+                    >
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">Advanced Options</TooltipContent>
+                </Tooltip>
+              </div>
               <Textarea
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                 placeholder="Enter task description"
-                rows={4}
+                rows={2}
               />
             </div>
 
-            {/* Task Period, Reminder Frequency, Addon & Issue flags */}
-            <div className="grid grid-cols-4 gap-6 items-end">
-              <div>
-                <Label className="text-sm font-semibold mb-2 block">Task Period</Label>
-                <Select
-                  value={taskPeriod}
-                  onValueChange={(v: any) => {
-                    setTaskPeriod(v);
-                    if (v !== "custom") {
-                      const today = new Date();
-                      const startStr = today.toISOString().split("T")[0];
-                      let endDate = new Date(today);
+            {/* Task Period, Reminder Frequency, Addon & Issue flags — tucked
+                behind the Advanced Options toggle above so the form stays
+                short by default; click the icon next to Description to
+                reveal these four fields. */}
+            {advancedTaskOptionsOpen && (
+              <div className="grid grid-cols-4 gap-6 items-end">
+                <div>
+                  <Label className="text-sm font-semibold mb-2 block">Task Period</Label>
+                  <Select
+                    value={taskPeriod}
+                    onValueChange={(v: any) => {
+                      setTaskPeriod(v);
+                      if (v !== "custom") {
+                        const today = new Date();
+                        const startStr = today.toISOString().split("T")[0];
+                        let endDate = new Date(today);
 
-                      if (v === "today") {
-                        // Same day
-                      } else if (v === "1 week") {
-                        endDate.setDate(endDate.getDate() + 7);
-                      } else if (v === "fortnight") {
-                        endDate.setDate(endDate.getDate() + 15);
-                      } else if (v === "1 month") {
-                        endDate.setMonth(endDate.getMonth() + 1);
-                      } else if (v === "quarterly") {
-                        endDate.setMonth(endDate.getMonth() + 3);
-                      } else if (v === "half yearly") {
-                        endDate.setMonth(endDate.getMonth() + 6);
-                      } else if (v === "annual") {
-                        endDate.setFullYear(endDate.getFullYear() + 1);
+                        if (v === "today") {
+                          // Same day
+                        } else if (v === "1 week") {
+                          endDate.setDate(endDate.getDate() + 7);
+                        } else if (v === "fortnight") {
+                          endDate.setDate(endDate.getDate() + 15);
+                        } else if (v === "1 month") {
+                          endDate.setMonth(endDate.getMonth() + 1);
+                        } else if (v === "quarterly") {
+                          endDate.setMonth(endDate.getMonth() + 3);
+                        } else if (v === "half yearly") {
+                          endDate.setMonth(endDate.getMonth() + 6);
+                        } else if (v === "annual") {
+                          endDate.setFullYear(endDate.getFullYear() + 1);
+                        }
+
+                        const endStr = endDate.toISOString().split("T")[0];
+                        setForm((f) => ({
+                          ...f,
+                          startDate: startStr,
+                          endDate: endStr,
+                          taskPeriod: v
+                        }));
+                      } else {
+                        setForm(f => ({ ...f, taskPeriod: "custom" }));
                       }
+                    }}
+                  >
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="Select task period" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="custom">Custom</SelectItem>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="1 week">1 Week</SelectItem>
+                      <SelectItem value="fortnight">Fortnight (15 Days)</SelectItem>
+                      <SelectItem value="1 month">1 Month</SelectItem>
+                      <SelectItem value="quarterly">Quarterly</SelectItem>
+                      <SelectItem value="half yearly">Half Yearly</SelectItem>
+                      <SelectItem value="annual">Annual</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
-                      const endStr = endDate.toISOString().split("T")[0];
-                      setForm((f) => ({
-                        ...f,
-                        startDate: startStr,
-                        endDate: endStr,
-                        taskPeriod: v
-                      }));
-                    } else {
-                      setForm(f => ({ ...f, taskPeriod: "custom" }));
-                    }
-                  }}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue placeholder="Select task period" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="custom">Custom</SelectItem>
-                    <SelectItem value="today">Today</SelectItem>
-                    <SelectItem value="1 week">1 Week</SelectItem>
-                    <SelectItem value="fortnight">Fortnight (15 Days)</SelectItem>
-                    <SelectItem value="1 month">1 Month</SelectItem>
-                    <SelectItem value="quarterly">Quarterly</SelectItem>
-                    <SelectItem value="half yearly">Half Yearly</SelectItem>
-                    <SelectItem value="annual">Annual</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+                <div>
+                  <Label className="text-sm font-semibold mb-2 block">Reminder Frequency</Label>
+                  <Select
+                    value={form.reminderFrequency}
+                    onValueChange={(v: any) => setForm((f) => ({ ...f, reminderFrequency: v }))}
+                  >
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="Select reminder frequency" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1 time">1 Time</SelectItem>
+                      <SelectItem value="2 times">2 Times</SelectItem>
+                      <SelectItem value="4 times">4 Times</SelectItem>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="weekly">Weekly</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="custom">Custom</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              <div>
-                <Label className="text-sm font-semibold mb-2 block">Reminder Frequency</Label>
-                <Select
-                  value={form.reminderFrequency}
-                  onValueChange={(v: any) => setForm((f) => ({ ...f, reminderFrequency: v }))}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue placeholder="Select reminder frequency" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1 time">1 Time</SelectItem>
-                    <SelectItem value="2 times">2 Times</SelectItem>
-                    <SelectItem value="4 times">4 Times</SelectItem>
-                    <SelectItem value="daily">Daily</SelectItem>
-                    <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="custom">Custom</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+                <div className="flex items-center gap-2 h-10 px-4 bg-slate-50 border border-slate-200 rounded-lg">
+                  <input
+                    type="checkbox"
+                    id="isAddon"
+                    checked={form.isAddon}
+                    onChange={(e) => setForm(f => ({ ...f, isAddon: e.target.checked }))}
+                    className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <Label htmlFor="isAddon" className="text-sm font-semibold cursor-pointer text-amber-700">Mark as Addon</Label>
+                </div>
 
-              <div className="flex items-center gap-2 h-10 px-4 bg-slate-50 border border-slate-200 rounded-lg">
-                <input
-                  type="checkbox"
-                  id="isAddon"
-                  checked={form.isAddon}
-                  onChange={(e) => setForm(f => ({ ...f, isAddon: e.target.checked }))}
-                  className="w-4 h-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
-                />
-                <Label htmlFor="isAddon" className="text-sm font-semibold cursor-pointer text-amber-700">Mark as Addon</Label>
+                <div className="flex items-center gap-2 h-10 px-4 bg-slate-50 border border-slate-200 rounded-lg">
+                  <input
+                    type="checkbox"
+                    id="isIssue"
+                    checked={form.isIssue}
+                    onChange={(e) => setForm(f => ({ ...f, isIssue: e.target.checked }))}
+                    className="w-4 h-4 rounded border-slate-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                  />
+                  <Label htmlFor="isIssue" className="text-sm font-semibold cursor-pointer text-red-700">Mark as Issue</Label>
+                </div>
               </div>
-
-              <div className="flex items-center gap-2 h-10 px-4 bg-slate-50 border border-slate-200 rounded-lg">
-                <input
-                  type="checkbox"
-                  id="isIssue"
-                  checked={form.isIssue}
-                  onChange={(e) => setForm(f => ({ ...f, isIssue: e.target.checked }))}
-                  className="w-4 h-4 rounded border-slate-300 text-red-600 focus:ring-red-500 cursor-pointer"
-                />
-                <Label htmlFor="isIssue" className="text-sm font-semibold cursor-pointer text-red-700">Mark as Issue</Label>
-              </div>
-            </div>
+            )}
 
             {/* Task Dependency & Automatic Schedule Management (new feature) */}
             {form.projectId && (

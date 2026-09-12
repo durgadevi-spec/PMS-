@@ -349,8 +349,8 @@ export function TaskFilters({
             <style>{scrollbarStyles}</style>
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogTrigger asChild>
-                    <Button variant="outline" className="relative gap-2 bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm transition-all duration-200">
-                        <Filter className="h-4 w-4" />
+                    <Button variant="outline" className="relative h-9 px-2.5 gap-1 text-sm bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm transition-all duration-200">
+                        <Filter className="h-3.5 w-3.5" />
                         <span className="font-medium">Filters</span>
                         {activeCount > 0 && (
                             <Badge variant="default" className="ml-1 h-5 min-w-5 flex items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-bold">
