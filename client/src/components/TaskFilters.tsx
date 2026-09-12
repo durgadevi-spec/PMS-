@@ -124,6 +124,15 @@ interface TaskFiltersProps {
     tagFilter: string;
     setTagFilter: (tagId: string) => void;
     allTags: any[];
+
+    // Moved in from Advanced Options: Overdue / Completed toggles and the
+    // Addon-vs-Issue Type filter now live in this dialog instead.
+    overdueFilter: string;
+    setOverdueFilter: React.Dispatch<React.SetStateAction<string>>;
+    showCompleted: boolean;
+    setShowCompleted: (value: boolean) => void;
+    addonFilter: string;
+    setAddonFilter: (value: string) => void;
 }
 
 const OPERATORS = [
@@ -195,6 +204,12 @@ export function TaskFilters({
     tagFilter,
     setTagFilter,
     allTags,
+    overdueFilter,
+    setOverdueFilter,
+    showCompleted,
+    setShowCompleted,
+    addonFilter,
+    setAddonFilter,
 }: TaskFiltersProps) {
     const [open, setOpen] = useState(false);
     const sortedClients = [...clients].sort((a, b) => a.localeCompare(b));
@@ -325,6 +340,8 @@ export function TaskFilters({
         periodFilter !== "all" ? periodFilter : "",
         startDateFilter,
         endDateFilter,
+        overdueFilter === "overdue" ? overdueFilter : "",
+        addonFilter !== "all" ? addonFilter : "",
     ].filter(Boolean).length + customFilters.length;
 
     return (
@@ -758,6 +775,51 @@ export function TaskFilters({
                                                 </Command>
                                             </PopoverContent>
                                         </Popover>
+                                    </div>
+
+                                    {/* Overdue / Completed / Type — moved in from Advanced Options
+                                        so all quick toggles live in one Filters dialog. */}
+                                    <div className="space-y-2">
+                                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">Overdue &amp; Completed</label>
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            <Button
+                                                type="button"
+                                                onClick={() => setOverdueFilter(prev => prev === "overdue" ? "all" : "overdue")}
+                                                className={cn(
+                                                    "h-9 px-2.5 text-xs justify-center flex items-center gap-1.5 shadow-sm transition-all duration-150 hover:shadow-md",
+                                                    overdueFilter === "overdue" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
+                                                )}
+                                            >
+                                                <span>Overdue</span>
+                                            </Button>
+
+                                            <div className="flex items-center gap-1.5 bg-slate-50/50 px-2.5 py-1 rounded-md border border-slate-200 h-9 hover:border-slate-300 hover:shadow-sm transition-all duration-150">
+                                                <input
+                                                    type="checkbox"
+                                                    id="filtersShowCompleted"
+                                                    checked={showCompleted}
+                                                    onChange={(e) => setShowCompleted(e.target.checked)}
+                                                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                                                />
+                                                <label htmlFor="filtersShowCompleted" className="text-xs font-medium text-slate-700 cursor-pointer">
+                                                    Completed
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-tight">Type</label>
+                                        <Select value={addonFilter} onValueChange={setAddonFilter}>
+                                            <SelectTrigger className="h-9 w-full bg-slate-50/50 border-slate-200 text-xs font-normal text-slate-700 hover:bg-slate-100 transition-colors">
+                                                <SelectValue placeholder="All" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="all">All</SelectItem>
+                                                <SelectItem value="addon">Addons</SelectItem>
+                                                <SelectItem value="issue">Issues</SelectItem>
+                                            </SelectContent>
+                                        </Select>
                                     </div>
 
                                     {/* Dynamic Pinned Filters */}

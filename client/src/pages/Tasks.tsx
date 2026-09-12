@@ -29,7 +29,6 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  Download,
   FileSpreadsheet,
   FileText,
   AlertTriangle,
@@ -1229,6 +1228,9 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
   const [cloneSubtaskOpen, setCloneSubtaskOpen] = useState(false);
   const [cloneSubtaskData, setCloneSubtaskData] = useState<{ id: string; title: string } | null>(null);
   const [cloneSubtaskNewTitle, setCloneSubtaskNewTitle] = useState("");
+
+  const [openDeleteSubtaskDialog, setOpenDeleteSubtaskDialog] = useState(false);
+  const [subtaskToDelete, setSubtaskToDelete] = useState<{ taskId: string; id: string; title: string } | null>(null);
 
   // Inline add-subtask form state (per-task)
   const [subtaskForms, setSubtaskForms] = useState<Record<string, { title: string; startDate: string; endDate: string; status: string; isCompleted: boolean }>>({});
@@ -4043,6 +4045,37 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     }
   };
 
+  const askDeleteSubtask = (taskId: string, subtask: { id?: string; title: string }) => {
+    if (!subtask.id) return;
+    setSubtaskToDelete({ taskId, id: subtask.id, title: subtask.title });
+    setOpenDeleteSubtaskDialog(true);
+  };
+
+  const confirmDeleteSubtask = async () => {
+    if (!subtaskToDelete) return;
+    const { taskId, id: subtaskId } = subtaskToDelete;
+
+    // Close dialog and remove from local state immediately (optimistic UI)
+    setOpenDeleteSubtaskDialog(false);
+    setSubtaskToDelete(null);
+    setTasks(prev => prev.map(t => t.id !== taskId ? t : {
+      ...t,
+      subtasks: (t.subtasks || []).filter(s => s.id !== subtaskId),
+      subtaskCount: Math.max(0, (t.subtaskCount || (t.subtasks || []).length) - 1),
+    }));
+
+    try {
+      const res = await apiFetch(`/api/subtasks/${subtaskId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      // Refresh so the parent task's rolled-up progress/dates (and any other
+      // expanded rows) reflect the server-side cascade recalculation.
+      refreshTasks();
+    } catch {
+      alert("Failed to delete subtask");
+      refreshTasks(); // revert by fetching again
+    }
+  };
+
   /* ================= UI HELPERS ================= */
 
   const getTaskHierarchy = (task: Task, includeSubtaskCount = false): string => {
@@ -4684,14 +4717,22 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
               endDateFilter={endDateFilter}
               setEndDateFilter={setEndDateFilter}
               allTags={allTags}
+              overdueFilter={overdueFilter}
+              setOverdueFilter={setOverdueFilter}
+              showCompleted={showCompleted}
+              setShowCompleted={setShowCompleted}
+              addonFilter={addonFilter}
+              setAddonFilter={setAddonFilter}
             />
 
             {/* Advanced Options — consolidates the less-frequently-used
                 actions (Quick Add, Manage Columns, Manage Tags, Expand All,
-                Dependencies, Subtask sort, Overdue, Completed, Export, Type
-                & Search) behind one icon button so the toolbar stays tidy.
-                "Filters" stays out on the main bar next to Add Task since
-                it's used most often. Each item below is a self-contained
+                Dependencies) behind one icon button so the toolbar stays
+                tidy. "Filters" stays out on the main bar next to Add Task
+                since it's used most often — Overdue, Completed and Type
+                (Addon/Issue) now live inside that Filters dialog instead of
+                here. Export moved out to its own Excel/PDF icon buttons at
+                the right of this row. Each item below is a self-contained
                 control (it manages its own popover/dialog/sheet), so they
                 just render normally here. */}
             <Popover open={advancedOptionsOpen} onOpenChange={setAdvancedOptionsOpen}>
@@ -4703,195 +4744,45 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                   <SlidersHorizontal className="h-4 w-4" /> Advanced Options
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[520px] p-2 max-h-[60vh] overflow-y-auto" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-                  {/* ---- LEFT COLUMN: Actions + Subtasks ---- */}
-                  <div className="space-y-2">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Actions</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Button
-                          onClick={() => setQuickAddTaskOpen(true)}
-                          variant="outline"
-                          className="h-8 px-2.5 text-xs justify-center border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300 hover:shadow-md shadow-sm transition-all duration-150"
-                        >
-                          <Plus className="h-3.5 w-3.5 mr-1" /> Quick Add
-                        </Button>
-                        <ManageColumns columns={columnsConfig} setColumns={setColumnsConfig} defaultColumns={defaultColumns} onSave={handleSaveColumns} />
-                        <ManageTagsDialog allTags={allTags} setAllTags={setAllTags} />
-                        <Button
-                          variant="outline"
-                          onClick={toggleExpandAll}
-                          disabled={expandableTaskIds.length === 0}
-                          className="h-8 px-2.5 text-xs justify-center gap-1.5 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
-                          title={allExpanded ? "Collapse all subtasks" : "Expand all subtasks"}
-                        >
-                          {allExpanded ? <ChevronsUp size={13} className="text-slate-500" /> : <ChevronsDown size={13} className="text-slate-500" />}
-                          <span>{allExpanded ? "Collapse All" : "Expand All"}</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => setDepDialogOpen(true)}
-                          disabled={!(projectId && projectId !== "all") && !(isFrozen && frozenProjectId)}
-                          title={(!projectId || projectId === "all") && isFrozen && frozenProjectId ? `Manage dependencies for frozen project` : undefined}
-                          className="h-8 px-2.5 text-xs justify-center text-primary border-primary/20 hover:bg-primary/5 transition-all duration-150"
-                        >
-                          <Link2 className="h-3.5 w-3.5 mr-1" /> Dependencies
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-100">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Subtasks</p>
-                      {/* Subtask date sort — display-order only, applies to every
-                          expanded task's subtask rows on this page. */}
-                      <div className="flex flex-wrap gap-1.5">
-                        <Select
-                          value={subtaskSortField}
-                          onValueChange={(v) => setSubtaskSortField(v as typeof subtaskSortField)}
-                        >
-                          <SelectTrigger className="h-8 w-[155px] text-xs" title="Sort subtasks by date">
-                            <SelectValue placeholder="Sort subtasks..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">Subtasks: Default order</SelectItem>
-                            <SelectItem value="startDate">Subtasks: Start Date</SelectItem>
-                            <SelectItem value="endDate">Subtasks: Due Date</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        {subtaskSortField !== "none" && (
-                          <Select
-                            value={subtaskSortDirection}
-                            onValueChange={(v) => setSubtaskSortDirection(v as typeof subtaskSortDirection)}
-                          >
-                            <SelectTrigger className="h-8 w-[130px] text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="asc">Oldest → Newest</SelectItem>
-                              <SelectItem value="desc">Newest → Oldest</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </div>
-                    </div>
+              <PopoverContent className="w-72 p-3 max-h-[60vh] overflow-y-auto" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Actions</p>
+                <div className="flex flex-col items-stretch gap-1.5">
+                  <Button
+                    onClick={() => setQuickAddTaskOpen(true)}
+                    variant="outline"
+                    className="h-8 w-full px-2.5 text-xs justify-start border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300 hover:shadow-md shadow-sm transition-all duration-150"
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" /> Quick Add
+                  </Button>
+                  <div className="w-full [&>button]:w-full [&>button]:justify-start">
+                    <ManageColumns columns={columnsConfig} setColumns={setColumnsConfig} defaultColumns={defaultColumns} onSave={handleSaveColumns} />
                   </div>
-
-                  {/* ---- RIGHT COLUMN: Filters + Export + Type & Search ---- */}
-                  <div className="space-y-2">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Filters</p>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Button
-                          onClick={() => setOverdueFilter(prev => prev === "overdue" ? "all" : "overdue")}
-                          className={cn(
-                            "h-8 px-2.5 text-xs justify-center flex items-center gap-1.5 shadow-sm transition-all duration-150 hover:shadow-md",
-                            overdueFilter === "overdue" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
-                          )}
-                        >
-                          <span>Overdue</span>
-                        </Button>
-
-                        <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-md border border-slate-200 h-8 hover:border-slate-300 hover:shadow-sm transition-all duration-150">
-                          <input
-                            type="checkbox"
-                            id="showCompleted"
-                            checked={showCompleted}
-                            onChange={(e) => setShowCompleted(e.target.checked)}
-                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                          />
-                          <label htmlFor="showCompleted" className="text-xs font-medium text-slate-700 cursor-pointer">
-                            Completed
-                          </label>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-100">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Export</p>
-                      <Popover open={exportColSelOpen} onOpenChange={setExportColSelOpen}>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            className="h-9 px-3 min-w-[110px] justify-center border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
-                          >
-                            <Download className="h-4 w-4 mr-1" /> Export
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-64 p-3" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
-                          <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                              <h4 className="font-semibold text-sm">Select Columns to Export</h4>
-                              <label className="text-xs flex items-center gap-1 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={exportSelectedCols.length === columnsConfig.filter(c => c.visible).length}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setExportSelectedCols(columnsConfig.filter(c => c.visible).map(c => c.id));
-                                    } else {
-                                      setExportSelectedCols([]);
-                                    }
-                                  }}
-                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                                />
-                                Select All
-                              </label>
-                            </div>
-                            <div className="max-h-[200px] overflow-y-auto space-y-1 p-1">
-                              {columnsConfig.filter(c => c.visible).map(col => (
-                                <div key={col.id} className="flex items-center gap-2">
-                                  <input
-                                    type="checkbox"
-                                    checked={exportSelectedCols.includes(col.id)}
-                                    onChange={(e) => {
-                                      if (e.target.checked) setExportSelectedCols(prev => [...prev, col.id]);
-                                      else setExportSelectedCols(prev => prev.filter(id => id !== col.id));
-                                    }}
-                                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                                  />
-                                  <span className="text-xs">{col.label}</span>
-                                </div>
-                              ))}
-                            </div>
-                            <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={exportIncludeGantt}
-                                onChange={(e) => setExportIncludeGantt(e.target.checked)}
-                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                              />
-                              <span className="text-xs font-medium">Include Gantt Chart</span>
-                            </div>
-                            <div className="flex gap-2">
-                              <Button size="sm" className="flex-1 text-xs" onClick={() => { setExportType('pdf'); handleExport(); }}>
-                                <FileText className="h-3 w-3 mr-1" /> PDF
-                              </Button>
-                              <Button size="sm" className="flex-1 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={() => { setExportType('excel'); handleExport(); }}>
-                                <FileSpreadsheet className="h-3 w-3 mr-1" /> Excel
-                              </Button>
-                            </div>
-                          </div>
-                        </PopoverContent>
-                      </Popover>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-100">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">Type</p>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Select value={addonFilter} onValueChange={setAddonFilter}>
-                          <SelectTrigger className="w-24 h-8 text-xs bg-white hover:border-slate-300 transition-colors duration-150">
-                            <SelectValue placeholder="All" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All</SelectItem>
-                            <SelectItem value="addon">Addons</SelectItem>
-                            <SelectItem value="issue">Issues</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
+                  <div className="w-full [&>button]:w-full [&>button]:justify-start">
+                    <ManageTagsDialog allTags={allTags} setAllTags={setAllTags} />
                   </div>
+                  {/* Collapse/Expand All — kept directly below Manage Tags, on its
+                      own full-width row, so the Actions list stays a single
+                      evenly aligned column instead of wrapping two buttons onto
+                      one row. */}
+                  <Button
+                    variant="outline"
+                    onClick={toggleExpandAll}
+                    disabled={expandableTaskIds.length === 0}
+                    className="h-8 w-full px-2.5 text-xs justify-start gap-1.5 border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 hover:shadow-md shadow-sm transition-all duration-150"
+                    title={allExpanded ? "Collapse all subtasks" : "Expand all subtasks"}
+                  >
+                    {allExpanded ? <ChevronsUp size={13} className="text-slate-500" /> : <ChevronsDown size={13} className="text-slate-500" />}
+                    <span>{allExpanded ? "Collapse All" : "Expand All"}</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => setDepDialogOpen(true)}
+                    disabled={!(projectId && projectId !== "all") && !(isFrozen && frozenProjectId)}
+                    title={(!projectId || projectId === "all") && isFrozen && frozenProjectId ? `Manage dependencies for frozen project` : undefined}
+                    className="h-8 w-full px-2.5 text-xs justify-start text-primary border-primary/20 hover:bg-primary/5 transition-all duration-150"
+                  >
+                    <Link2 className="h-3.5 w-3.5 mr-1" /> Dependencies
+                  </Button>
                 </div>
               </PopoverContent>
             </Popover>
@@ -4905,6 +4796,94 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
+            </div>
+
+            {/* Export — two icon-only buttons at the right corner of this
+                row (Excel / PDF). Both share the same column-selection
+                popover; the icon clicked sets exportType, and the
+                popover's single confirm button at the bottom just runs
+                that export — no separate PDF/Excel choice inside anymore
+                since the icon already made that choice. */}
+            <div className="ml-auto flex items-center gap-1.5">
+              <Popover open={exportColSelOpen} onOpenChange={setExportColSelOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setExportType('excel')}
+                    className="h-9 w-9 border-slate-200 text-green-600 hover:bg-green-50 hover:border-green-300 hover:shadow-md shadow-sm transition-all duration-150"
+                    title="Export as Excel"
+                  >
+                    <FileSpreadsheet className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-64 p-3" align="end" onOpenAutoFocus={(e) => e.preventDefault()}>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-semibold text-sm">Select Columns to Export</h4>
+                      <label className="text-xs flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={exportSelectedCols.length === columnsConfig.filter(c => c.visible).length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setExportSelectedCols(columnsConfig.filter(c => c.visible).map(c => c.id));
+                            } else {
+                              setExportSelectedCols([]);
+                            }
+                          }}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                        />
+                        Select All
+                      </label>
+                    </div>
+                    <div className="max-h-[200px] overflow-y-auto space-y-1 p-1">
+                      {columnsConfig.filter(c => c.visible).map(col => (
+                        <div key={col.id} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={exportSelectedCols.includes(col.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setExportSelectedCols(prev => [...prev, col.id]);
+                              else setExportSelectedCols(prev => prev.filter(id => id !== col.id));
+                            }}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                          />
+                          <span className="text-xs">{col.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={exportIncludeGantt}
+                        onChange={(e) => setExportIncludeGantt(e.target.checked)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                      />
+                      <span className="text-xs font-medium">Include Gantt Chart</span>
+                    </div>
+                    {exportType === 'excel' ? (
+                      <Button size="sm" className="w-full text-xs bg-green-600 hover:bg-green-700 text-white" onClick={handleExport}>
+                        <FileSpreadsheet className="h-3 w-3 mr-1" /> Export Excel
+                      </Button>
+                    ) : (
+                      <Button size="sm" className="w-full text-xs" onClick={handleExport}>
+                        <FileText className="h-3 w-3 mr-1" /> Export PDF
+                      </Button>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => { setExportType('pdf'); setExportColSelOpen(true); }}
+                className="h-9 w-9 border-slate-200 text-red-600 hover:bg-red-50 hover:border-red-300 hover:shadow-md shadow-sm transition-all duration-150"
+                title="Export as PDF"
+              >
+                <FileText className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </div>
@@ -7191,6 +7170,15 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                           >
                                             <MessageSquare size={10} />
                                           </Button>
+                                          <Button
+                                            size="icon"
+                                            variant="ghost"
+                                            className="h-5 w-5 text-red-650 hover:text-red-750 hover:bg-red-50"
+                                            onClick={() => askDeleteSubtask(task.id, { id: subtask.id, title: subtask.title })}
+                                            title="Delete Subtask"
+                                          >
+                                            <Trash2 size={10} />
+                                          </Button>
                                         </div>
                                       </td>
                                     </tr>
@@ -7322,6 +7310,25 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
               Cancel
             </Button>
             <Button variant="destructive" onClick={confirmDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={openDeleteSubtaskDialog} onOpenChange={setOpenDeleteSubtaskDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Subtask</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm">
+            Delete <span className="font-bold">{subtaskToDelete?.title || "this subtask"}</span>? This can't be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpenDeleteSubtaskDialog(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDeleteSubtask}>
               Delete
             </Button>
           </DialogFooter>

@@ -5409,6 +5409,73 @@ export async function registerRoutes(
     }
   });
 
+  // DELETE SUBTASK
+  app.delete("/api/subtasks/:id", requireAuth, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+
+      const [existing] = await db.select({ taskId: subtasks.taskId }).from(subtasks).where(eq(subtasks.id, id));
+      if (!existing) return res.status(404).json({ message: "Subtask not found" });
+      const { taskId } = existing;
+
+      // subtask_members and subtask_tags both cascade at the DB level
+      // (see shared/schema.ts), so deleting the row is enough to clean
+      // those up too.
+      await db.delete(subtasks).where(eq(subtasks.id, id));
+
+      // Recalculate the parent task's rolled-up progress/status and, since
+      // a deleted subtask can change the earliest/latest date across the
+      // remaining ones, its Start/End Date — same cascade used when a
+      // subtask's own progress or dates change (PATCH /api/subtasks/:id),
+      // just recomputed from `taskId` directly since this subtask is gone.
+      updateParentProgress('task', taskId, req.user?.id).catch((err) => {
+        console.error('[DELETE /api/subtasks/:id] Background progress update failed:', err);
+      });
+
+      (async () => {
+        try {
+          const remaining = await db.select().from(subtasks).where(eq(subtasks.taskId, taskId));
+          if (remaining.length === 0) return;
+          const newStart = earliestDate(remaining.map((s) => s.startDate));
+          const newEnd = latestDate(remaining.map((s) => s.endDate));
+          if (!newStart && !newEnd) return;
+
+          const [currentTask] = await db.select().from(projectTasks).where(eq(projectTasks.id, taskId));
+          if (!currentTask) return;
+
+          const taskUpdate: any = {};
+          if (newStart && newStart !== currentTask.startDate) taskUpdate.startDate = newStart;
+          if (newEnd && newEnd !== currentTask.endDate) taskUpdate.endDate = newEnd;
+
+          const effectiveStart = taskUpdate.startDate || currentTask.startDate;
+          const effectiveEnd = taskUpdate.endDate || currentTask.endDate;
+          if (effectiveStart && effectiveEnd) {
+            const sD = new Date(effectiveStart);
+            const eD = new Date(effectiveEnd);
+            if (!isNaN(sD.getTime()) && !isNaN(eD.getTime())) {
+              const diffDays = Math.round((eD.getTime() - sD.getTime()) / (1000 * 60 * 60 * 24));
+              if (diffDays >= 0) taskUpdate.durationDays = diffDays;
+            }
+          }
+
+          if (Object.keys(taskUpdate).length > 0) {
+            taskUpdate.updatedAt = new Date();
+            await db.update(projectTasks).set(taskUpdate).where(eq(projectTasks.id, taskId));
+            await updateParentTimeline('task', taskId, currentTask.keyStepId || currentTask.projectId);
+          }
+        } catch (err) {
+          console.error('[DELETE /api/subtasks/:id] Background timeline update failed:', err);
+        }
+      })();
+
+      res.json({ success: true });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error("Subtask delete error:", errorMessage);
+      res.status(500).json({ message: "Failed to delete subtask", details: errorMessage });
+    }
+  });
+
   // CLONE SUBTASK
   app.post("/api/subtasks/:id/clone", requireAuth, async (req: any, res) => {
     try {
