@@ -607,7 +607,11 @@ function RaiseTicketForm({
     if (!formData.department) return employees;
     const norm = (d: string) => (d || "").toLowerCase().trim().replace(/\s+/g, " ");
     const targetDept = norm(formData.department);
-    return employees.filter(e => norm(e.department) === targetDept);
+    return employees.filter(e => {
+      if (!e.department) return false;
+      const empDepts = e.department.split(/[,/&]+/).map((d: string) => norm(d));
+      return empDepts.includes(targetDept);
+    });
   }, [employees, formData.department]);
 
   const [files, setFiles] = useState<File[]>([]);
@@ -776,10 +780,6 @@ function RaiseTicketForm({
     e.preventDefault();
     if (!formData.assignedTo) {
       toast({ title: "Required Field", description: "Please assign an agent to this ticket.", variant: "destructive" });
-      return;
-    }
-    if (!formData.participants || formData.participants.length === 0) {
-      toast({ title: "Required Field", description: "Please add at least one participant.", variant: "destructive" });
       return;
     }
     setIsSubmitting(true);

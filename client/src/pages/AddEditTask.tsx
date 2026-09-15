@@ -279,10 +279,9 @@ export default function AddEditTask() {
     const deptMembersToAdd = allEmployees
       .filter(emp => {
         if (!emp.department) return false;
-        // Normalize department names for case-insensitive comparison
-        const empDeptNorm = emp.department.toLowerCase().trim();
+        const empDepts = emp.department.split(/[,/&]+/).map((d: string) => d.toLowerCase().trim());
         return projectDepts.some((projDept: string) =>
-          projDept.toLowerCase().trim() === empDeptNorm
+          empDepts.includes(projDept.toLowerCase().trim())
         );
       })
       .map(emp => String(emp.id));
@@ -327,7 +326,11 @@ export default function AddEditTask() {
       .catch((err) => console.error("Failed to fetch departments", err));
   }, []);
 
-  const filteredEmployees = selectedDepartment === "all" ? employees : employees.filter(e => e.department === selectedDepartment);
+  const filteredEmployees = selectedDepartment === "all" ? employees : employees.filter(e => {
+    if (!e.department) return false;
+    const empDepts = e.department.split(/[,/&]+/).map((d: string) => d.toLowerCase().trim());
+    return empDepts.includes(selectedDepartment.toLowerCase().trim());
+  });
 
   // When the department filter changes, drop any already-selected assignees
   // (task members) and subtask assignees that no longer belong to the
@@ -337,7 +340,11 @@ export default function AddEditTask() {
 
     const validIds = new Set(
       employees
-        .filter((e) => e.department === selectedDepartment)
+        .filter((e) => {
+          if (!e.department) return false;
+          const empDepts = e.department.split(/[,/&]+/).map((d: string) => d.toLowerCase().trim());
+          return empDepts.includes(selectedDepartment.toLowerCase().trim());
+        })
         .map((e) => String(e.id))
     );
 
