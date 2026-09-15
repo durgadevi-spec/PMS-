@@ -996,7 +996,7 @@ function RaiseTicketForm({
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Participants / CC <span className="text-destructive">*</span></Label>
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Participants / CC</Label>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {formData.participants.map((pId: string) => {
                     const emp = employees.find((e: any) => e.id === pId);
