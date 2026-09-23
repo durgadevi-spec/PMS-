@@ -248,12 +248,32 @@ export async function listCliqChannels(userId: string) {
   return cliqRequest(userId, "/channels?joined=true&limit=100");
 }
 
+// Best-effort extraction of "when was this chat last active", trying every
+// field name Cliq's v2/v3 chat list responses have been seen to use. Used
+// only as a tiebreaker below — never to override the structural score.
+function getChatRecency(chat: any): number {
+  const candidates = [
+    chat?.last_modified_time,
+    chat?.last_message_info?.time,
+    chat?.last_message_information?.time,
+    chat?.last_message_time,
+  ];
+  for (const value of candidates) {
+    if (value === undefined || value === null) continue;
+    const parsed = typeof value === "number" ? value : Date.parse(String(value));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
 export async function findCliqChatByEmail(userId: string, email: string) {
   const normalizedEmail = email.trim().toLowerCase();
   const result = await listCliqChats(userId) as {
     chats?: Array<{ chat_id?: string; chat_type?: string; participant_count?: number; name?: string; title?: string }>
   } | null;
-  const matches: Array<{ chat: any; score: number }> = [];
+  const matches: Array<{ chat: any; score: number; recency: number }> = [];
+
+  console.log(`[cliq-chat-lookup] email=${normalizedEmail} scanning ${result?.chats?.length ?? 0} chats`);
 
   for (const chat of result?.chats || []) {
     if (!chat.chat_id) continue;
@@ -284,12 +304,29 @@ export async function findCliqChatByEmail(userId: string, email: string) {
       (participantCount === 2 ? 25 : 0) +
       (!chat.name ? 8 : 0)
     );
+    const recency = getChatRecency(chat);
 
-    matches.push({ chat, score });
+    console.log(
+      `[cliq-chat-lookup]   candidate chat_id=${chat.chat_id} name=${JSON.stringify(chat.name)} ` +
+      `chat_type=${chat.chat_type} participant_count=${participantCount} score=${score} ` +
+      `recency=${recency ? new Date(recency).toISOString() : "unknown"}`
+    );
+
+    matches.push({ chat, score, recency });
   }
 
-  if (matches.length === 0) return null;
-  matches.sort((a, b) => b.score - a.score);
+  if (matches.length === 0) {
+    console.log(`[cliq-chat-lookup] no chat found with a member matching ${normalizedEmail} — falling back to client-side name matching`);
+    return null;
+  }
+  // Highest structural score wins first (i.e. genuinely looks like a 1:1
+  // chat). Only when two candidates score identically — e.g. Naveen is a
+  // member of both his personal DM and an old, unrelated 2-person chat
+  // such as an archived IT-support thread — do we break the tie by which
+  // one has actually been active more recently, so a months-old stale chat
+  // can't be shown instead of the live conversation.
+  matches.sort((a, b) => (b.score - a.score) || (b.recency - a.recency));
+  console.log(`[cliq-chat-lookup] picked chat_id=${matches[0].chat.chat_id} name=${JSON.stringify(matches[0].chat.name)} out of ${matches.length} candidate(s)`);
   return matches[0].chat;
 }
 
@@ -340,7 +377,7 @@ export async function uploadCliqFile(
   if (!accessToken) return null;
 
   const form = new FormData();
-  form.append("file", new Blob([file.buffer], { type: file.mimetype }), file.filename);
+  form.append("file", new Blob([Uint8Array.from(file.buffer)], { type: file.mimetype }), file.filename);
   const response = await fetch(`${CLIQ_API_BASE}/buddies/${encodeURIComponent(email)}/files`, {
     method: "POST",
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
@@ -360,7 +397,7 @@ export async function uploadCliqChatFile(
   if (!accessToken) return null;
 
   const form = new FormData();
-  form.append("file", new Blob([file.buffer], { type: file.mimetype }), file.filename);
+  form.append("file", new Blob([Uint8Array.from(file.buffer)], { type: file.mimetype }), file.filename);
   const response = await fetch(`${CLIQ_API_BASE}/chats/${encodeURIComponent(chatId)}/files`, {
     method: "POST",
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
@@ -380,7 +417,7 @@ export async function uploadCliqChannelFile(
   if (!accessToken) return null;
 
   const form = new FormData();
-  form.append("file", new Blob([file.buffer], { type: file.mimetype }), file.filename);
+  form.append("file", new Blob([Uint8Array.from(file.buffer)], { type: file.mimetype }), file.filename);
   const response = await fetch(`${CLIQ_API_BASE}/channels/${encodeURIComponent(channelId)}/files`, {
     method: "POST",
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },

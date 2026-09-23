@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, MessageCircle, ExternalLink, Users2, Link2, Unlink, Loader2, Send, RefreshCw, Paperclip, Hash, X } from "lucide-react";
+import { Search, MessageCircle, ExternalLink, Users2, Link2, Unlink, Loader2, Send, RefreshCw, Paperclip, Hash, X, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -30,6 +30,9 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
   const [selectedChannel, setSelectedChannel] = useState<CliqChannel | null>(null);
   const [selectedThread, setSelectedThread] = useState<CliqThread | null>(null);
   const [selectedGroupChat, setSelectedGroupChat] = useState<{ chat_id: string; name?: string; participant_count?: number } | null>(null);
+  // Tracked separately from selectedChannel so the threads sublist can be
+  // collapsed without also leaving/deselecting the channel itself.
+  const [expandedChannelId, setExpandedChannelId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
@@ -81,34 +84,55 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
     refetchOnMount: "always",
   });
 
+  // Zoho Cliq's /chats endpoint returns chat_type "chat" for BOTH 1:1 DMs
+  // and group chats — participant_count is the only reliable signal for
+  // "is this actually a direct chat with just one other person". Do not
+  // OR this with chat_type again, or every group chat becomes eligible.
+  const isDirectCliqChat = (chat: { participant_count?: number }) => Number(chat.participant_count ?? 0) <= 2;
+
+  // Last-resort fallback ONLY: the accurate match is getCliqChatForEmail,
+  // which checks real chat membership by email on the server. This fallback
+  // only runs once that lookup has finished and found nothing (see
+  // selectedChat below) — it must never race ahead of it. Because it's a
+  // last resort, require a strict full-name or exact-email-prefix match
+  // rather than loose single-token substring matching, which could match
+  // an unrelated chat (e.g. a short token like an initial matching almost
+  // any chat name).
   const fallbackDirectChat = useMemo(() => {
     if (!selectedEmployee || !chatsData?.chats) return null;
 
     const targetName = (selectedEmployee.name || "").trim().toLowerCase();
     const targetEmailPrefix = (selectedEmployee.email || "").split("@")[0].trim().toLowerCase();
+    if (!targetName && !targetEmailPrefix) return null;
 
-    return chatsData.chats.find((chat) => {
-      const participantCount = Number(chat.participant_count ?? 0);
-      const isDirectChat = chat.chat_type === "chat" || participantCount <= 2;
-      if (!isDirectChat) return false;
+    const candidates = chatsData.chats.filter((chat) => {
+      if (!isDirectCliqChat(chat)) return false;
 
       const chatName = (chat.name || "").trim().toLowerCase();
-      const nameTokens = targetName.split(/\s+/).filter(Boolean);
+      if (!chatName) return false;
 
-      return (
-        chatName.includes(targetName) ||
-        nameTokens.some((token) => chatName.includes(token)) ||
-        (targetEmailPrefix && chatName.includes(targetEmailPrefix))
-      );
-    }) || null;
+      return chatName === targetName || (!!targetEmailPrefix && chatName === targetEmailPrefix);
+    });
+
+    // If more than one chat matches exactly, we can't safely tell them
+    // apart by name alone — better to show nothing than the wrong person's
+    // conversation.
+    return candidates.length === 1 ? candidates[0] : null;
   }, [chatsData, selectedEmployee]);
 
   const selectedChat = useMemo(() => {
     if (selectedChannel && !selectedThread) return null;
     if (selectedGroupChat) return selectedGroupChat;
+    if (!selectedEmployee) return null;
+    // Only fall back to the loose name match once the accurate,
+    // email-based server lookup has actually finished. Using the fallback
+    // while that request is still in flight is what let a random chat
+    // flash up before correcting itself (or stick around if the lookup
+    // failed silently).
+    if (chatLookupLoading) return null;
     const directChat = selectedChatData?.chat ?? fallbackDirectChat;
     return directChat ?? null;
-  }, [selectedChatData, fallbackDirectChat, selectedChannel, selectedGroupChat, selectedThread]);
+  }, [selectedChatData, chatLookupLoading, fallbackDirectChat, selectedChannel, selectedGroupChat, selectedThread, selectedEmployee]);
 
   const selectedChatId = selectedThread?.chat_id || selectedChannel?.chat_id || selectedGroupChat?.chat_id || selectedChat?.chat_id || null;
   const selectedConversationKey = selectedChatId || null;
@@ -123,36 +147,14 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
     refetchInterval: selectedChatId ? 10 * 1000 : false,
   });
 
-  const matchesSelectedEmployeeConversation = (message: CliqMessage) => {
-    if (!selectedEmployee?.email) return true;
-
-    const currentEmail = cliqStatus && "connected" in cliqStatus && cliqStatus.connected
-      ? cliqStatus.cliqEmail.toLowerCase()
-      : "";
-    const selectedEmail = selectedEmployee.email.toLowerCase();
-    const senderEmail = (message.sender as { email?: string } | undefined)?.email?.toLowerCase() || "";
-    const senderName = (message.sender?.name || "").trim().toLowerCase();
-    const selectedName = (selectedEmployee.name || "").trim().toLowerCase();
-    const selectedNameTokens = selectedName.split(/\s+/).filter(Boolean);
-
-    const isCurrentUser = senderEmail === currentEmail || senderName === "you" || senderName === "me";
-    const isSelectedUser = senderEmail === selectedEmail || senderName === selectedName || selectedNameTokens.some((token) => senderName.includes(token));
-
-    return isCurrentUser || isSelectedUser;
-  };
-
   const visibleMessages = useMemo(() => {
     const key = selectedConversationKey;
     if (!key) return [];
     const messages = [...(messagesData?.data || []), ...(optimisticMessages[key] || [])];
     return messages
       .filter((message, index, all) => all.findIndex((candidate) => candidate.id === message.id) === index)
-      .filter((message) => {
-        if (!selectedEmployee?.email || selectedChannel || selectedThread || selectedGroupChat) return true;
-        return matchesSelectedEmployeeConversation(message);
-      })
       .sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
-  }, [messagesData, optimisticMessages, selectedConversationKey, selectedEmployee, selectedChannel, selectedThread, selectedGroupChat, cliqStatus]);
+  }, [messagesData, optimisticMessages, selectedConversationKey]);
 
   useEffect(() => {
     if (!selectedChatId) return;
@@ -249,6 +251,7 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
     setSelectedEmployee(null);
     setSelectedGroupChat(null);
     setSelectedFile(null);
+    setExpandedChannelId(channel.channel_id);
   };
 
   const openCliqThread = (thread: CliqThread) => {
@@ -525,12 +528,24 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
           <div className="space-y-1">
             {channelsData.channels.map((channel) => (
               <div key={channel.channel_id}>
-                <button type="button" onClick={() => openCliqChannel(channel)} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors", selectedChannel?.channel_id === channel.channel_id ? "bg-slate-500" : "hover:bg-slate-600")}>
-                  <Hash className="h-4 w-4 shrink-0 text-slate-200" />
-                  <span className="truncate">{channel.name.replace(/^#/, "")}</span>
-                </button>
-                {selectedChannel?.channel_id === channel.channel_id && (
-                  <div className="ml-5 space-y-1 border-l border-slate-500 pl-2">
+                <div className={cn("flex w-full items-center gap-1 rounded-md pr-1 text-left text-sm transition-colors", selectedChannel?.channel_id === channel.channel_id ? "bg-slate-500" : "hover:bg-slate-600")}>
+                  <button type="button" onClick={() => openCliqChannel(channel)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2">
+                    <Hash className="h-4 w-4 shrink-0 text-slate-200" />
+                    <span className="truncate">{channel.name.replace(/^#/, "")}</span>
+                  </button>
+                  {selectedChannel?.channel_id === channel.channel_id && (
+                    <button
+                      type="button"
+                      onClick={() => setExpandedChannelId((current) => (current === channel.channel_id ? null : channel.channel_id))}
+                      title={expandedChannelId === channel.channel_id ? "Collapse threads" : "Expand threads"}
+                      className="shrink-0 rounded p-1 text-slate-200 hover:bg-slate-400/40"
+                    >
+                      <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expandedChannelId === channel.channel_id ? "rotate-0" : "-rotate-90")} />
+                    </button>
+                  )}
+                </div>
+                {selectedChannel?.channel_id === channel.channel_id && expandedChannelId === channel.channel_id && (
+                  <div className="ml-5 max-h-48 space-y-1 overflow-y-auto border-l border-slate-500 pl-2">
                     {threadsLoading ? <p className="px-2 py-1 text-[11px] text-slate-300">Loading threads...</p> : threadsData?.data?.length ? threadsData.data.map((thread) => (
                       <button key={thread.chat_id} type="button" onClick={() => openCliqThread(thread)} className={cn("flex w-full items-center rounded px-2 py-1.5 text-left text-xs transition-colors", selectedThread?.chat_id === thread.chat_id ? "bg-slate-500" : "text-slate-200 hover:bg-slate-600")}>
                         <span className="truncate">{thread.title || thread.last_message_information?.text || "Untitled thread"}</span>
@@ -543,13 +558,13 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
           </div>
         </div>
       ) : null}
-      {chatsData?.chats?.filter((chat) => chat.chat_type === "chat" || (chat.participant_count || 0) > 2).length ? (
+      {chatsData?.chats?.filter((chat) => !isDirectCliqChat(chat)).length ? (
         <div className="shrink-0 border-b border-slate-600 px-2 py-3">
           <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
             <Users2 className="h-3 w-3" /> Groups
           </div>
           <div className="space-y-1">
-            {chatsData.chats.filter((chat) => chat.chat_type === "chat" || (chat.participant_count || 0) > 2).map((group) => (
+            {chatsData.chats.filter((chat) => !isDirectCliqChat(chat)).map((group) => (
               <button key={group.chat_id} type="button" onClick={() => openCliqGroup(group)} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors", selectedGroupChat?.chat_id === group.chat_id ? "bg-slate-500" : "hover:bg-slate-600")}>
                 <Users2 className="h-4 w-4 shrink-0 text-slate-200" />
                 <span className="truncate">{group.name}</span>
