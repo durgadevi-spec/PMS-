@@ -7,7 +7,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { CLIQ_BASE_URL, buildCliqUserDeepLink } from "@/lib/cliqConfig";
-import { connectCliq, deleteCliqMessage, disconnectCliqAccount, downloadCliqFile, getCliqChannelThreads, getCliqChannels, getCliqChatForEmail, getCliqChats, getCliqMessages, getCliqStatus, sendCliqChannelMessage, sendCliqChatMessage, sendCliqMessage, sendCliqThreadMessage, type CliqChannel, type CliqMessage, type CliqThread, uploadCliqChannelFile, uploadCliqChatFile, uploadCliqFile } from "@/lib/cliqApi";
+import { connectCliq, deleteCliqMessage, disconnectCliqAccount, downloadCliqFile, getCliqChannelThreads, getCliqChannels, getCliqChatForEmail, getCliqChats, getCliqMessages, getCliqStatus, sendCliqChannelMessage, sendCliqChatMessage, sendCliqMessage, sendCliqThreadMessage, type CliqChannel, type CliqChat, type CliqMessage, type CliqThread, uploadCliqChannelFile, uploadCliqChatFile, uploadCliqFile } from "@/lib/cliqApi";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -22,9 +22,59 @@ type Employee = {
 interface ZohoCliqPanelProps {
   employees: Employee[];
   currentEmployeeId?: string | null;
+  // Reports the number of Cliq conversations (DMs + group chats) that have
+  // a message newer than the last time this user opened them, so the
+  // parent page can show a notification-style number badge on the "Zoho
+  // Cliq" tab without duplicating the unread-tracking logic itself.
+  onUnreadCountChange?: (count: number) => void;
 }
 
-export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliqPanelProps) {
+// Zoho Cliq's /chats endpoint (v2) does not return a per-chat unread count,
+// so "unread" here is tracked client-side: we remember the timestamp each
+// chat was last opened and compare it against that chat's last message
+// time. This is per-browser (localStorage), scoped per logged-in employee.
+const CLIQ_LAST_READ_STORAGE_PREFIX = "cliq_last_read:";
+
+function loadCliqLastReadMap(employeeId?: string | null): Record<string, number> {
+  if (!employeeId) return {};
+  try {
+    const raw = localStorage.getItem(CLIQ_LAST_READ_STORAGE_PREFIX + employeeId);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCliqLastReadMap(employeeId: string | null | undefined, map: Record<string, number>) {
+  if (!employeeId) return;
+  try {
+    localStorage.setItem(CLIQ_LAST_READ_STORAGE_PREFIX + employeeId, JSON.stringify(map));
+  } catch {
+    // Storage full or unavailable — unread tracking just won't persist.
+  }
+}
+
+// Best-effort extraction of "when was this chat last active" for unread
+// tracking — mirrors the same field-name fallbacks server/cliqOAuth.ts
+// already had to use (getChatRecency), since different Cliq DCs/API
+// versions have been observed to use different keys, and the value can
+// come through as either a number (epoch ms) or an ISO date string.
+function getCliqChatLastMessageTime(chat?: Record<string, any>): number {
+  const candidates = [
+    chat?.last_message_info?.time,
+    chat?.last_message_information?.time,
+    chat?.last_modified_time,
+    chat?.last_message_time,
+  ];
+  for (const value of candidates) {
+    if (value === undefined || value === null || value === "") continue;
+    const parsed = typeof value === "number" ? value : Date.parse(String(value));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCountChange }: ZohoCliqPanelProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<CliqChannel | null>(null);
@@ -60,7 +110,33 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
     queryFn: getCliqChats,
     enabled: !!cliqStatus?.connected,
     staleTime: 30 * 1000,
+    // Unlike the one-shot status check above, this list needs to notice
+    // new incoming messages on its own — otherwise the unread badge would
+    // only ever update when this panel happens to remount (e.g. switching
+    // page tabs away and back).
+    refetchInterval: cliqStatus?.connected ? 20 * 1000 : false,
   });
+
+  // Per-chat "last opened" timestamps used to derive unread state — see the
+  // CLIQ_LAST_READ_STORAGE_PREFIX helpers above.
+  const [cliqLastReadMap, setCliqLastReadMap] = useState<Record<string, number>>({});
+  const cliqUnreadBootstrappedRef = useRef(false);
+
+  useEffect(() => {
+    setCliqLastReadMap(loadCliqLastReadMap(currentEmployeeId));
+    cliqUnreadBootstrappedRef.current = false;
+  }, [currentEmployeeId]);
+
+  const markCliqChatRead = (chatId?: string | null) => {
+    if (!chatId) return;
+    setCliqLastReadMap((current) => {
+      const now = Date.now();
+      if ((current[chatId] ?? 0) >= now) return current;
+      const next = { ...current, [chatId]: now };
+      saveCliqLastReadMap(currentEmployeeId, next);
+      return next;
+    });
+  };
 
   const { data: channelsData, isLoading: channelsLoading } = useQuery({
     queryKey: ["cliq-channels"],
@@ -89,6 +165,36 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
   // "is this actually a direct chat with just one other person". Do not
   // OR this with chat_type again, or every group chat becomes eligible.
   const isDirectCliqChat = (chat: { participant_count?: number }) => Number(chat.participant_count ?? 0) <= 2;
+
+  // The first time we see this user's chat list, treat every conversation
+  // as already read instead of flooding them with unread badges for
+  // history that predates this feature. Anything that arrives after this
+  // (or any chat we've genuinely never seen before) still counts as
+  // unread, since it simply won't have an entry yet.
+  useEffect(() => {
+    if (!chatsData?.chats || cliqUnreadBootstrappedRef.current) return;
+    cliqUnreadBootstrappedRef.current = true;
+    setCliqLastReadMap((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const chat of chatsData.chats) {
+        if (!chat.chat_id) continue;
+        if (!(chat.chat_id in next)) {
+          next[chat.chat_id] = getCliqChatLastMessageTime(chat);
+          changed = true;
+        }
+      }
+      if (changed) saveCliqLastReadMap(currentEmployeeId, next);
+      return changed ? next : current;
+    });
+  }, [chatsData, currentEmployeeId]);
+
+  const isCliqChatUnread = (chat?: { chat_id?: string; last_message_info?: { time?: string } }) => {
+    if (!chat?.chat_id) return false;
+    const lastMessageTime = getCliqChatLastMessageTime(chat);
+    if (!lastMessageTime) return false;
+    return lastMessageTime > (cliqLastReadMap[chat.chat_id] ?? 0);
+  };
 
   // Last-resort fallback ONLY: the accurate match is getCliqChatForEmail,
   // which checks real chat membership by email on the server. This fallback
@@ -120,6 +226,38 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
     return candidates.length === 1 ? candidates[0] : null;
   }, [chatsData, selectedEmployee]);
 
+  // Same exact-match heuristic as fallbackDirectChat above, but run across
+  // every teammate up front so each row in the list can show its own
+  // unread badge without a per-employee server lookup.
+  const employeeCliqChatMap = useMemo(() => {
+    const map: Record<string, CliqChat> = {};
+    if (!chatsData?.chats) return map;
+    const directChats = chatsData.chats.filter(isDirectCliqChat);
+    for (const emp of employees) {
+      const targetName = (emp.name || "").trim().toLowerCase();
+      const targetEmailPrefix = (emp.email || "").split("@")[0].trim().toLowerCase();
+      if (!targetName && !targetEmailPrefix) continue;
+      const candidates = directChats.filter((chat) => {
+        const chatName = (chat.name || "").trim().toLowerCase();
+        if (!chatName) return false;
+        return chatName === targetName || (!!targetEmailPrefix && chatName === targetEmailPrefix);
+      });
+      if (candidates.length === 1) map[emp.id] = candidates[0];
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatsData, employees]);
+
+  const cliqUnreadCount = useMemo(() => {
+    if (!chatsData?.chats) return 0;
+    return chatsData.chats.filter((chat) => isCliqChatUnread(chat)).length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatsData, cliqLastReadMap]);
+
+  useEffect(() => {
+    onUnreadCountChange?.(cliqUnreadCount);
+  }, [cliqUnreadCount, onUnreadCountChange]);
+
   const selectedChat = useMemo(() => {
     if (selectedChannel && !selectedThread) return null;
     if (selectedGroupChat) return selectedGroupChat;
@@ -135,6 +273,14 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
   }, [selectedChatData, chatLookupLoading, fallbackDirectChat, selectedChannel, selectedGroupChat, selectedThread, selectedEmployee]);
 
   const selectedChatId = selectedThread?.chat_id || selectedChannel?.chat_id || selectedGroupChat?.chat_id || selectedChat?.chat_id || null;
+
+  // Opening a conversation is what clears its unread badge — this fires
+  // for DMs (once the email-to-chat lookup above resolves), group chats,
+  // and threads alike, since they all funnel through selectedChatId.
+  useEffect(() => {
+    markCliqChatRead(selectedChatId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChatId]);
   const selectedConversationKey = selectedChatId || null;
   const selectedTitle = selectedThread?.title || selectedChannel?.name || selectedGroupChat?.name || selectedEmployee?.name || "Conversation";
 
@@ -451,6 +597,11 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
             <h2 className="flex items-center gap-2 text-base font-bold">
               <MessageCircle className="h-4 w-4 text-primary" />
               Zoho Cliq
+              {cliqUnreadCount > 0 && (
+                <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+                  {cliqUnreadCount > 99 ? "99+" : cliqUnreadCount}
+                </span>
+              )}
             </h2>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
               Chat with teammates from inside PMS. Zoho Cliq remains the source of truth.
@@ -564,12 +715,32 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
             <Users2 className="h-3 w-3" /> Groups
           </div>
           <div className="space-y-1">
-            {chatsData.chats.filter((chat) => !isDirectCliqChat(chat)).map((group) => (
-              <button key={group.chat_id} type="button" onClick={() => openCliqGroup(group)} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors", selectedGroupChat?.chat_id === group.chat_id ? "bg-slate-500" : "hover:bg-slate-600")}>
+            {chatsData.chats.filter((chat) => !isDirectCliqChat(chat)).map((group) => {
+              const groupUnread = isCliqChatUnread(group);
+              return (
+              <button
+                key={group.chat_id}
+                type="button"
+                onClick={() => openCliqGroup(group)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                  selectedGroupChat?.chat_id === group.chat_id
+                    ? "bg-slate-500"
+                    : groupUnread
+                    ? "bg-amber-400/20 text-amber-50 hover:bg-amber-400/30"
+                    : "hover:bg-slate-600"
+                )}
+              >
                 <Users2 className="h-4 w-4 shrink-0 text-slate-200" />
-                <span className="truncate">{group.name}</span>
+                <span className={cn("min-w-0 flex-1 truncate", groupUnread && "font-semibold")}>{group.name}</span>
+                {groupUnread && (
+                  <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+                    •
+                  </span>
+                )}
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}
@@ -590,7 +761,9 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
                   </Badge>
                 </div>
                 <div className="space-y-1">
-                  {members.map((emp) => (
+                  {members.map((emp) => {
+                    const empUnread = isCliqChatUnread(employeeCliqChatMap[emp.id]);
+                    return (
                     <div
                       key={emp.id}
                       role="button"
@@ -602,7 +775,14 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
                           openCliqChat(emp);
                         }
                       }}
-                      className={cn("group flex cursor-pointer items-center gap-3 rounded-md p-2 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-300", selectedEmployee?.id === emp.id ? "bg-slate-500" : "hover:bg-slate-600")}
+                      className={cn(
+                        "group flex cursor-pointer items-center gap-3 rounded-md p-2 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-300",
+                        selectedEmployee?.id === emp.id
+                          ? "bg-slate-500"
+                          : empUnread
+                          ? "bg-amber-400/20 hover:bg-amber-400/30"
+                          : "hover:bg-slate-600"
+                      )}
                     >
                       <Avatar className="h-9 w-9 shrink-0 ring-1 ring-border">
                         <AvatarFallback className="bg-slate-500 text-xs font-semibold text-slate-50">
@@ -610,13 +790,17 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId }: ZohoCliq
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">
-                        <p className="truncate text-sm font-medium">{emp.name}</p>
+                        <p className={cn("truncate text-sm", empUnread ? "font-semibold text-white" : "font-medium")}>{emp.name}</p>
                         <p className="truncate text-xs text-slate-200">
                           {emp.designation || emp.email}
                         </p>
                       </div>
+                      {empUnread && (
+                        <span className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" title="Unread messages" />
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}

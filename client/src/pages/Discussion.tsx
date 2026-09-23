@@ -89,6 +89,7 @@ export default function Discussion() {
     return stored === "whatsapp" || stored === "cliq" ? stored : "discussions";
   });
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null);
+  const [cliqUnreadCount, setCliqUnreadCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [replyInput, setReplyInput] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -499,6 +500,11 @@ export default function Discussion() {
         >
           <MessageCircle className="h-4 w-4 text-blue-600" />
           Zoho Cliq
+          {cliqUnreadCount > 0 && (
+            <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+              {cliqUnreadCount > 99 ? "99+" : cliqUnreadCount}
+            </span>
+          )}
         </button>
         <button
           onClick={() => switchPageTab("whatsapp")}
@@ -526,7 +532,7 @@ export default function Discussion() {
         {activePageTab === "whatsapp" ? (
           <WhatsAppTab />
         ) : activePageTab === "cliq" ? (
-          <ZohoCliqPanel employees={employees} currentEmployeeId={user?.employeeId} />
+          <ZohoCliqPanel employees={employees} currentEmployeeId={user?.employeeId} onUnreadCountChange={setCliqUnreadCount} />
         ) : (
     <div className="flex h-full gap-6 overflow-hidden">
       {/* Sidebar: Discussion List */}
