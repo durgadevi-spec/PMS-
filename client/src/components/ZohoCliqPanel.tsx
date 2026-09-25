@@ -583,6 +583,20 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
   }, [filtered]);
 
+  const filteredChannels = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    const channels = channelsData?.channels ?? [];
+    if (!term) return channels;
+    return channels.filter((channel) => channel.name?.toLowerCase().replace(/^#/, "").includes(term));
+  }, [channelsData, searchTerm]);
+
+  const filteredGroups = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    const groups = (chatsData?.chats ?? []).filter((chat) => !isDirectCliqChat(chat));
+    if (!term) return groups;
+    return groups.filter((group) => group.name?.toLowerCase().includes(term));
+  }, [chatsData, searchTerm]);
+
   const openCliqChat = (employee: Employee) => {
     setSelectedEmployee(employee);
     setSelectedThread(null);
@@ -920,7 +934,7 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
         <div className="relative mx-auto w-full max-w-[420px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search teammates..."
+            placeholder="Search teammates, channels, and groups..."
             className="h-8 border bg-background pl-9 shadow-none"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -1005,14 +1019,14 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
             </div>
           )}
 
-          {channelsData?.channels?.length ? (
+          {filteredChannels.length ? (
             <div className="shrink-0 border-t border-slate-600 px-2 py-3">
               <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
                 <Hash className="h-3 w-3" /> Channels
-                <Badge variant="outline" className="ml-1 border-slate-400 text-[10px] font-normal text-slate-100">{channelsData.channels.length}</Badge>
+                <Badge variant="outline" className="ml-1 border-slate-400 text-[10px] font-normal text-slate-100">{filteredChannels.length}</Badge>
               </div>
               <div className="space-y-1">
-                {channelsData.channels.map((channel) => (
+                {filteredChannels.map((channel) => (
                   <div key={channel.channel_id}>
                     <div className={cn("flex w-full items-center gap-1 rounded-md pr-1 text-left text-sm transition-colors", selectedChannel?.channel_id === channel.channel_id ? "bg-slate-500" : "hover:bg-slate-600")}>
                       <button type="button" onClick={() => openCliqChannel(channel)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2">
@@ -1043,15 +1057,22 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
                 ))}
               </div>
             </div>
+          ) : searchTerm.trim() ? (
+            <div className="shrink-0 border-t border-slate-600 px-2 py-3">
+              <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
+                <Hash className="h-3 w-3" /> Channels
+              </div>
+              <div className="px-3 py-2 text-xs italic text-slate-300">No channels found</div>
+            </div>
           ) : null}
 
-          {chatsData?.chats?.filter((chat) => !isDirectCliqChat(chat)).length ? (
+          {filteredGroups.length ? (
             <div className="shrink-0 border-t border-slate-600 px-2 py-3">
               <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
                 <Users2 className="h-3 w-3" /> Groups
               </div>
               <div className="space-y-1">
-                {chatsData.chats.filter((chat) => !isDirectCliqChat(chat)).map((group) => {
+                {filteredGroups.map((group) => {
                   const groupUnread = isCliqChatUnread(group);
                   return (
                     <button
@@ -1078,6 +1099,13 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
                   );
                 })}
               </div>
+            </div>
+          ) : searchTerm.trim() ? (
+            <div className="shrink-0 border-t border-slate-600 px-2 py-3">
+              <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
+                <Users2 className="h-3 w-3" /> Groups
+              </div>
+              <div className="px-3 py-2 text-xs italic text-slate-300">No groups found</div>
             </div>
           ) : null}
         </div>
