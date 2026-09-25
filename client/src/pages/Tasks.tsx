@@ -1075,7 +1075,20 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
 
   // Bulk Key Step
   const [bulkKeyStepId, setBulkKeyStepId] = useState<string>("");
+  const [bulkKeyStepSearch, setBulkKeyStepSearch] = useState("");
   const [bulkKeyStepPopoverOpen, setBulkKeyStepPopoverOpen] = useState(false);
+  const bulkKeyStepOptions = keySteps.filter((ks) => {
+    const targetProjectId = isFrozen && frozenProjectId != null
+      ? String(frozenProjectId)
+      : (projectId && projectId !== "all" ? String(projectId) : "");
+    const isCompleted = String(ks.status ?? "").trim().toLowerCase() === "completed";
+    if (isCompleted) return false;
+    if (!targetProjectId) return true;
+    return String(ks.projectId) === String(targetProjectId);
+  });
+  const filteredBulkKeyStepOptions = bulkKeyStepOptions.filter((ks) =>
+    ks.title.toLowerCase().includes(bulkKeyStepSearch.toLowerCase())
+  );
 
   // Bulk CC
   const [bulkAssignTagsList, setBulkAssignTagsList] = useState<string[]>([]);
@@ -5162,19 +5175,45 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                   <Key className="h-3 w-3 mr-1" /> Key Step
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-64 p-3" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
+              <PopoverContent className="w-72 p-3" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
                 <div className="space-y-3">
                   <h4 className="font-semibold text-xs">Assign Key Step to Selected</h4>
-                  <Select value={bulkKeyStepId} onValueChange={setBulkKeyStepId}>
-                    <SelectTrigger className="w-full text-xs h-8">
-                      <SelectValue placeholder="Select Key Step" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {keySteps.filter(ks => !projectId || ks.projectId === projectId).map(ks => (
-                        <SelectItem key={ks.id} value={ks.id} className="text-xs">{ks.title}</SelectItem>
+
+                  <Command className="rounded-lg border border-slate-200 bg-white">
+                    <CommandInput
+                      placeholder={isFrozen && frozenProjectId ? "Search frozen project key steps..." : "Search key steps..."}
+                      value={bulkKeyStepSearch}
+                      onValueChange={setBulkKeyStepSearch}
+                    />
+                    <CommandList className="max-h-64 overflow-y-auto">
+                      <CommandEmpty className="py-2 text-xs text-slate-500">
+                        {isFrozen && frozenProjectId ? "No key steps for the frozen project" : "No key steps available"}
+                      </CommandEmpty>
+                      {filteredBulkKeyStepOptions.map((ks) => (
+                        <CommandItem
+                          key={ks.id}
+                          value={ks.title}
+                          onSelect={() => {
+                            setBulkKeyStepId(ks.id);
+                            setBulkKeyStepSearch("");
+                          }}
+                          className={cn(
+                            "text-xs cursor-pointer",
+                            bulkKeyStepId === ks.id && "bg-slate-100"
+                          )}
+                        >
+                          <span className="truncate">{ks.title}</span>
+                        </CommandItem>
                       ))}
-                    </SelectContent>
-                  </Select>
+                    </CommandList>
+                  </Command>
+
+                  <div className="text-[11px] text-slate-500">
+                    {bulkKeyStepId
+                      ? `Selected: ${bulkKeyStepOptions.find((ks) => ks.id === bulkKeyStepId)?.title || "Key step"}`
+                      : "Choose a key step"}
+                  </div>
+
                   <Button size="sm" onClick={handleBulkUpdateKeyStep} className="w-full h-8 text-xs" disabled={!bulkKeyStepId}>
                     Apply Key Step
                   </Button>
