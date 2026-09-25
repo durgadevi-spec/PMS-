@@ -78,6 +78,8 @@ export default function KeyStepsFullPage() {
   const { isFrozen, frozenProjectId, isItemFrozen, frozenItem, freezeProject, freezeItem, clearFreezeItem } = useFreeze();
   const [selectedKeystepIds, setSelectedKeystepIds] = useState<string[]>([]);
   const [bulkStatusValue, setBulkStatusValue] = useState<KeyStep["status"]>("pending");
+  const [bulkStartDate, setBulkStartDate] = useState("");
+  const [bulkEndDate, setBulkEndDate] = useState("");
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickTitles, setQuickTitles] = useState<string[]>(Array.from({ length: 5 }).map(() => ""));
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -594,6 +596,50 @@ export default function KeyStepsFullPage() {
     } catch (err: any) {
       setKeySteps(prev);
       toast({ variant: "destructive", title: "Delete failed", description: err?.message || "Please try again." });
+    }
+  };
+
+  const bulkUpdateSelectedDates = async () => {
+    if (selectedKeystepIds.length === 0) return;
+    const ids = [...selectedKeystepIds];
+    const payload: Record<string, string> = {};
+
+    if (bulkStartDate) payload.startDate = bulkStartDate;
+    if (bulkEndDate) payload.endDate = bulkEndDate;
+    if (Object.keys(payload).length === 0) return;
+
+    const prev = keySteps;
+    setKeySteps((current) => current.map((step) => {
+      if (!ids.includes(step.id)) return step;
+      return {
+        ...step,
+        ...(bulkStartDate ? { startDate: bulkStartDate } : {}),
+        ...(bulkEndDate ? { endDate: bulkEndDate } : {}),
+      };
+    }));
+
+    try {
+      const results = await Promise.all(ids.map(async (id) => {
+        const res = await apiFetch(`/api/key-steps/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(`Failed to update dates for key step ${id}`);
+        return res.json();
+      }));
+
+      const updatedMap = new Map(results.map((item) => [String(item.id), item]));
+      setKeySteps((current) => current.map((step) => {
+        const refreshed = updatedMap.get(String(step.id));
+        return refreshed ? { ...step, ...refreshed } : step;
+      }));
+      setBulkStartDate("");
+      setBulkEndDate("");
+      toast({ title: "Dates updated", description: `${ids.length} key step${ids.length > 1 ? "s" : ""} updated.` });
+    } catch (err: any) {
+      setKeySteps(prev);
+      toast({ variant: "destructive", title: "Couldn't update dates", description: err?.message || "Please try again." });
     }
   };
 
@@ -1166,6 +1212,16 @@ export default function KeyStepsFullPage() {
                 <option value="cancelled">Cancelled</option>
               </select>
               <Button size="sm" variant="outline" onClick={() => bulkUpdateSelectedStatus(bulkStatusValue)}>Apply Status</Button>
+
+              <div className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-1.5 py-1">
+                <span className="text-[10px] text-slate-500">Start</span>
+                <input type="date" value={bulkStartDate} onChange={(e) => setBulkStartDate(e.target.value)} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs" />
+              </div>
+              <div className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-1.5 py-1">
+                <span className="text-[10px] text-slate-500">End</span>
+                <input type="date" value={bulkEndDate} onChange={(e) => setBulkEndDate(e.target.value)} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs" />
+              </div>
+              <Button size="sm" variant="outline" onClick={bulkUpdateSelectedDates}>Apply Dates</Button>
               <Button size="sm" variant="destructive" onClick={bulkDeleteSelected}>Delete</Button>
               <Button size="sm" variant="ghost" onClick={() => setSelectedKeystepIds([])}>Clear</Button>
             </div>
