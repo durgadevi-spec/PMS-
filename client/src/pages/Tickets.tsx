@@ -6,6 +6,7 @@ import {
   Search,
   Filter,
   MessageSquare,
+  MessageCircle,
   History,
   CheckCircle2,
   Clock,
@@ -1095,6 +1096,7 @@ function TicketsTable({
   employees?: any[],
   projects?: any[]
 }) {
+  const { user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -1303,7 +1305,7 @@ function TicketsTable({
               <TableHead className="cursor-pointer select-none" onClick={() => handleSort("assignee")}>
                 <div className="flex items-center gap-1">Task Owner {sortIndicator("assignee")}</div>
               </TableHead>
-              <TableHead className="text-right">Action</TableHead>
+              <TableHead className="text-center">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1405,61 +1407,133 @@ function TicketsTable({
                       )
                     )}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={() => onView(t.id)} title="View Details">
-                        <ChevronRight className="h-4 w-4" />
-                      </Button>
-                      {t.taskId ? (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
-                          onClick={() => {
+                  <TableCell className="align-middle">
+                    <div className="mx-auto grid grid-cols-8 gap-1 justify-items-center" style={{ width: 220 }}>
+                      {[
+                        <Popover key="discuss">
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 shrink-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                              title="Discuss / contact"
+                            >
+                              <MessageSquare className="h-4 w-4" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-44 p-2" align="end" onOpenAutoFocus={(e) => e.preventDefault()}>
+                            <div className="space-y-1">
+                              <Button
+                                variant="ghost"
+                                className="h-8 w-full justify-start gap-2 px-2 text-xs"
+                                onClick={() => {
+                                  const params = new URLSearchParams();
+                                  if (t.projectId) params.set("projectId", String(t.projectId));
+                                  if (t.projectName) params.set("projectTitle", String(t.projectName));
+                                  if (t.ticketCode) params.set("ticketCode", String(t.ticketCode));
+                                  if (t.title) params.set("taskName", String(t.title));
+                                  if (t.id) params.set("ticketId", String(t.id));
+                                  window.location.href = `/discussion?${params.toString()}`;
+                                }}
+                              >
+                                <MessageSquare size={12} />
+                                Discuss
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                className="h-8 w-full justify-start gap-2 px-2 text-xs"
+                                disabled={!t.assignedTo && !t.participants?.length}
+                                onClick={() => {
+                                  const recipientIds = Array.from(new Set([t.assignedTo, ...(t.participants || [])].filter(Boolean).map(String)));
+                                  const recipientId = recipientIds[0];
+                                  if (!recipientId) return;
+                                  const params = new URLSearchParams({
+                                    whatsapp: "1",
+                                    employeeId: String(recipientId),
+                                    recipientIds: recipientIds.join(","),
+                                    taskName: t.title,
+                                    projectTitle: t.projectName || t.manualProject || "",
+                                  });
+                                  window.location.href = `/discussion?${params.toString()}`;
+                                }}
+                              >
+                                <MessageCircle size={12} className="text-green-600" />
+                                WhatsApp
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                className="h-8 w-full justify-start gap-2 px-2 text-xs"
+                                onClick={() => {
+                                  const allRecipientIds = Array.from(new Set([t.assignedTo, ...(t.participants || []), t.createdBy].filter(Boolean).map(String)));
+                                  const nonSelfRecipientIds = allRecipientIds.filter((id) => String(id) !== String(user?.employeeId) && String(id) !== String(user?.id));
+                                  const preferredRecipientId = nonSelfRecipientIds[0] || null;
+                                  const params = new URLSearchParams();
+                                  if (t.projectId) params.set("projectId", String(t.projectId));
+                                  if (t.projectName) params.set("projectTitle", String(t.projectName));
+                                  if (t.id) params.set("ticketId", String(t.id));
+                                  if (t.title) params.set("taskName", String(t.title));
+                                  if (allRecipientIds.length > 0) params.set("recipientIds", allRecipientIds.join(","));
+                                  if (preferredRecipientId) {
+                                    params.set("employeeId", String(preferredRecipientId));
+                                  }
+                                  params.set("cliq", "1");
+                                  window.location.href = `/discussion?${params.toString()}`;
+                                }}
+                              >
+                                <MessageCircle size={12} className="text-blue-600" />
+                                Cliq
+                              </Button>
+                            </div>
+                          </PopoverContent>
+                        </Popover>,
+                        <Button key="view" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={() => onView(t.id)} title="View Details">
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>,
+                        t.taskId ? (
+                          <Button key="task-link" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50" onClick={() => {
                             sessionStorage.setItem("tasks_navigate_fresh", "1");
                             localStorage.setItem("tasks_searchQuery", t.title);
                             window.location.href = "/tasks";
-                          }}
-                          title="Go to Linked PMS Task"
-                        >
-                          <ExternalLink className="h-4 w-4" />
+                          }} title="Go to Linked PMS Task">
+                            <ExternalLink className="h-4 w-4" />
+                          </Button>
+                        ) : (
+                          <div key="task-link-blank" className="h-7 w-7" />
+                        ),
+                        t.taskId ? (
+                          <div key="task-add-blank" className="h-7 w-7" />
+                        ) : (
+                          <Button key="task-add" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50" onClick={() => setAddToTaskTicket(t)} title="Add to PMS Task">
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        ),
+                        t.status !== "Closed" && t.status !== "Pending Closure" ? (
+                          <Button key="request-close" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50" onClick={() => { setRequestCloseTicket(t); setCloseReason(""); }} title="Request Closure">
+                            <CheckCircle2 className="h-4 w-4" />
+                          </Button>
+                        ) : (
+                          <div key="request-close-blank" className="h-7 w-7" />
+                        ),
+                        <Button key="clone" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-purple-600 hover:text-purple-700 hover:bg-purple-50" onClick={() => setCloningTicket(t)} title="Clone Ticket">
+                          <Copy className="h-4 w-4" />
+                        </Button>,
+                        <Button key="edit" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50" onClick={() => setEditingTicket(t)} title="Edit Ticket">
+                          <Pencil className="h-4 w-4" />
+                        </Button>,
+                        <Button key="delete" variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => {
+                          if (confirm("Are you sure you want to delete this ticket?")) {
+                            deleteMutation.mutate(t.id);
+                          }
+                        }} title="Delete Ticket">
+                          <Trash2 className="h-4 w-4" />
                         </Button>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
-                          onClick={() => setAddToTaskTicket(t)}
-                          title="Add to PMS Task"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {/* Request Close button — visible to everyone */}
-                      {t.status !== "Closed" && t.status !== "Pending Closure" && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
-                          onClick={() => { setRequestCloseTicket(t); setCloseReason(""); }}
-                          title="Request Closure"
-                        >
-                          <CheckCircle2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-purple-600 hover:text-purple-700 hover:bg-purple-50" onClick={() => setCloningTicket(t)} title="Clone Ticket">
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50" onClick={() => setEditingTicket(t)} title="Edit Ticket">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => {
-                        if (confirm("Are you sure you want to delete this ticket?")) {
-                          deleteMutation.mutate(t.id);
-                        }
-                      }} title="Delete Ticket">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      ].map((slot, index) => (
+                        <div key={`action-slot-${index}`} className="flex h-7 w-7 items-center justify-center">
+                          {slot}
+                        </div>
+                      ))}
                     </div>
                   </TableCell>
                 </TableRow>

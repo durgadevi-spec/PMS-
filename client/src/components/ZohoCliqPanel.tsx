@@ -554,12 +554,12 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     }
   };
 
-  // Only employees with a usable email can be reached via a Cliq deep link.
-  // We also drop the current user, since chatting with yourself isn't useful.
+  // Show all teammates in the list so people remain searchable even when their
+  // Cliq email is missing. We keep the email warning message below the list,
+  // but the list itself should not disappear just because an employee has no
+  // email yet.
   const chattableEmployees = useMemo(() => {
-    return employees.filter(
-      (e) => !!e.email && e.email.trim().length > 0 && e.id !== currentEmployeeId
-    );
+    return employees.filter((e) => e.id !== currentEmployeeId);
   }, [employees, currentEmployeeId]);
 
   const filtered = useMemo(() => {
@@ -726,7 +726,9 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     }
   };
 
-  const missingEmailCount = employees.length - chattableEmployees.length - (currentEmployeeId ? 1 : 0);
+  const missingEmailCount = employees.filter(
+    (e) => e.id !== currentEmployeeId && (!e.email || e.email.trim().length === 0)
+  ).length;
 
   const getMessageText = (message: CliqMessage) => {
     if (message.content?.text) return message.content.text;
@@ -927,159 +929,158 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
       </div>
 
       <div className="flex min-h-0 flex-1">
-      <div className="flex min-h-0 w-64 shrink-0 flex-col border-r border-slate-600 bg-slate-700 text-slate-50">
-      {channelsData?.channels?.length ? (
-        <div className="shrink-0 border-b border-slate-600 px-2 py-3">
-          <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
-            <Hash className="h-3 w-3" /> Channels
-            <Badge variant="outline" className="ml-1 border-slate-400 text-[10px] font-normal text-slate-100">{channelsData.channels.length}</Badge>
-          </div>
-          <div className="space-y-1">
-            {channelsData.channels.map((channel) => (
-              <div key={channel.channel_id}>
-                <div className={cn("flex w-full items-center gap-1 rounded-md pr-1 text-left text-sm transition-colors", selectedChannel?.channel_id === channel.channel_id ? "bg-slate-500" : "hover:bg-slate-600")}>
-                  <button type="button" onClick={() => openCliqChannel(channel)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2">
-                    <Hash className="h-4 w-4 shrink-0 text-slate-200" />
-                    <span className="truncate">{channel.name.replace(/^#/, "")}</span>
-                  </button>
-                  {selectedChannel?.channel_id === channel.channel_id && (
-                    <button
-                      type="button"
-                      onClick={() => setExpandedChannelId((current) => (current === channel.channel_id ? null : channel.channel_id))}
-                      title={expandedChannelId === channel.channel_id ? "Collapse threads" : "Expand threads"}
-                      className="shrink-0 rounded p-1 text-slate-200 hover:bg-slate-400/40"
-                    >
-                      <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expandedChannelId === channel.channel_id ? "rotate-0" : "-rotate-90")} />
-                    </button>
-                  )}
-                </div>
-                {selectedChannel?.channel_id === channel.channel_id && expandedChannelId === channel.channel_id && (
-                  <div className="ml-5 max-h-48 space-y-1 overflow-y-auto border-l border-slate-500 pl-2">
-                    {threadsLoading ? <p className="px-2 py-1 text-[11px] text-slate-300">Loading threads...</p> : threadsData?.data?.length ? threadsData.data.map((thread) => (
-                      <button key={thread.chat_id} type="button" onClick={() => openCliqThread(thread)} className={cn("flex w-full items-center rounded px-2 py-1.5 text-left text-xs transition-colors", selectedThread?.chat_id === thread.chat_id ? "bg-slate-500" : "text-slate-200 hover:bg-slate-600")}>
-                        <span className="truncate">{thread.title || thread.last_message_information?.text || "Untitled thread"}</span>
-                      </button>
-                    )) : <p className="px-2 py-1 text-[11px] text-slate-300">No open threads</p>}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {chatsData?.chats?.filter((chat) => !isDirectCliqChat(chat)).length ? (
-        <div className="shrink-0 border-b border-slate-600 px-2 py-3">
-          <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
-            <Users2 className="h-3 w-3" /> Groups
-          </div>
-          <div className="space-y-1">
-            {chatsData.chats.filter((chat) => !isDirectCliqChat(chat)).map((group) => {
-              const groupUnread = isCliqChatUnread(group);
-              return (
-              <button
-                key={group.chat_id}
-                type="button"
-                onClick={() => openCliqGroup(group)}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
-                  selectedGroupChat?.chat_id === group.chat_id
-                    ? "bg-slate-500"
-                    : groupUnread
-                    ? "bg-amber-400/20 text-amber-50 hover:bg-amber-400/30"
-                    : "hover:bg-slate-600"
-                )}
-              >
-                <Users2 className="h-4 w-4 shrink-0 text-slate-200" />
-                <span className={cn("min-w-0 flex-1 truncate", groupUnread && "font-semibold")}>{group.name}</span>
-                {groupUnread && (
-                  <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
-                    •
-                  </span>
-                )}
-              </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+      <div className="flex min-h-0 w-64 shrink-0 flex-col overflow-hidden border-r border-slate-600 bg-slate-700 text-slate-50">
       <ScrollArea className="min-h-0 flex-1">
-        {filtered.length === 0 ? (
-          <div className="p-8 text-center text-muted-foreground text-sm italic">
-            No teammates found
-          </div>
-        ) : (
-          <div className="space-y-4 p-2">
-            {grouped.map(([department, members]) => (
-              <div key={department}>
-                <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
-                  <Users2 className="h-3 w-3 text-slate-300" />
-                  {department}
-                  <Badge variant="outline" className="ml-1 border-slate-400 text-[10px] font-normal text-slate-100">
-                    {members.length}
-                  </Badge>
+        <div className="space-y-3 py-2">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs italic text-slate-300">
+              No teammates found
+            </div>
+          ) : (
+            <div className="space-y-4 p-2">
+              {grouped.map(([department, members]) => (
+                <div key={department}>
+                  <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
+                    <Users2 className="h-3 w-3 text-slate-300" />
+                    {department}
+                    <Badge variant="outline" className="ml-1 border-slate-400 text-[10px] font-normal text-slate-100">
+                      {members.length}
+                    </Badge>
+                  </div>
+                  <div className="space-y-1">
+                    {members.map((emp) => {
+                      const empChat = employeeCliqChatMap[emp.id];
+                      const empUnread = isCliqChatUnread(empChat);
+                      const empUnreadCount = empChat ? unreadCountByChatId[empChat.chat_id] : undefined;
+                      return (
+                        <div
+                          key={emp.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openCliqChat(emp)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openCliqChat(emp);
+                            }
+                          }}
+                          className={cn(
+                            "group flex cursor-pointer items-center gap-3 rounded-md p-2 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-300",
+                            selectedEmployee?.id === emp.id
+                              ? "bg-slate-500"
+                              : empUnread
+                              ? "bg-amber-400/20 hover:bg-amber-400/30"
+                              : "hover:bg-slate-600"
+                          )}
+                        >
+                          <Avatar className="h-9 w-9 shrink-0 ring-1 ring-border">
+                            <AvatarFallback className="bg-slate-500 text-xs font-semibold text-slate-50">
+                              {emp.name?.charAt(0)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <p className={cn("truncate text-sm", empUnread ? "font-semibold text-white" : "font-medium")}>{emp.name}</p>
+                            <p className="truncate text-xs text-slate-200">
+                              {emp.designation || emp.email || "No email on file"}
+                            </p>
+                          </div>
+                          {empUnread && (
+                            empUnreadCount ? (
+                              <span
+                                className="ml-auto flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-semibold leading-none text-white"
+                                title={`${empUnreadCount} unread message${empUnreadCount === 1 ? "" : "s"}`}
+                              >
+                                {empUnreadCount > 99 ? "99+" : empUnreadCount}
+                              </span>
+                            ) : (
+                              <span className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" title="Unread messages" />
+                            )
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  {members.map((emp) => {
-                    const empChat = employeeCliqChatMap[emp.id];
-                    const empUnread = isCliqChatUnread(empChat);
-                    // The count query only kicks off once we know the
-                    // chat is unread (see unreadDirectChatIds), so right
-                    // after a new message arrives it may still be
-                    // loading — fall back to a plain dot for that brief
-                    // window instead of showing "0".
-                    const empUnreadCount = empChat ? unreadCountByChatId[empChat.chat_id] : undefined;
-                    return (
-                    <div
-                      key={emp.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => openCliqChat(emp)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          openCliqChat(emp);
-                        }
-                      }}
+              ))}
+            </div>
+          )}
+
+          {channelsData?.channels?.length ? (
+            <div className="shrink-0 border-t border-slate-600 px-2 py-3">
+              <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
+                <Hash className="h-3 w-3" /> Channels
+                <Badge variant="outline" className="ml-1 border-slate-400 text-[10px] font-normal text-slate-100">{channelsData.channels.length}</Badge>
+              </div>
+              <div className="space-y-1">
+                {channelsData.channels.map((channel) => (
+                  <div key={channel.channel_id}>
+                    <div className={cn("flex w-full items-center gap-1 rounded-md pr-1 text-left text-sm transition-colors", selectedChannel?.channel_id === channel.channel_id ? "bg-slate-500" : "hover:bg-slate-600")}>
+                      <button type="button" onClick={() => openCliqChannel(channel)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2">
+                        <Hash className="h-4 w-4 shrink-0 text-slate-200" />
+                        <span className="truncate">{channel.name.replace(/^#/, "")}</span>
+                      </button>
+                      {selectedChannel?.channel_id === channel.channel_id && (
+                        <button
+                          type="button"
+                          onClick={() => setExpandedChannelId((current) => (current === channel.channel_id ? null : channel.channel_id))}
+                          title={expandedChannelId === channel.channel_id ? "Collapse threads" : "Expand threads"}
+                          className="shrink-0 rounded p-1 text-slate-200 hover:bg-slate-400/40"
+                        >
+                          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expandedChannelId === channel.channel_id ? "rotate-0" : "-rotate-90")} />
+                        </button>
+                      )}
+                    </div>
+                    {selectedChannel?.channel_id === channel.channel_id && expandedChannelId === channel.channel_id && (
+                      <div className="ml-5 max-h-48 space-y-1 overflow-y-auto border-l border-slate-500 pl-2">
+                        {threadsLoading ? <p className="px-2 py-1 text-[11px] text-slate-300">Loading threads...</p> : threadsData?.data?.length ? threadsData.data.map((thread) => (
+                          <button key={thread.chat_id} type="button" onClick={() => openCliqThread(thread)} className={cn("flex w-full items-center rounded px-2 py-1.5 text-left text-xs transition-colors", selectedThread?.chat_id === thread.chat_id ? "bg-slate-500" : "text-slate-200 hover:bg-slate-600")}>
+                            <span className="truncate">{thread.title || thread.last_message_information?.text || "Untitled thread"}</span>
+                          </button>
+                        )) : <p className="px-2 py-1 text-[11px] text-slate-300">No open threads</p>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {chatsData?.chats?.filter((chat) => !isDirectCliqChat(chat)).length ? (
+            <div className="shrink-0 border-t border-slate-600 px-2 py-3">
+              <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-300">
+                <Users2 className="h-3 w-3" /> Groups
+              </div>
+              <div className="space-y-1">
+                {chatsData.chats.filter((chat) => !isDirectCliqChat(chat)).map((group) => {
+                  const groupUnread = isCliqChatUnread(group);
+                  return (
+                    <button
+                      key={group.chat_id}
+                      type="button"
+                      onClick={() => openCliqGroup(group)}
                       className={cn(
-                        "group flex cursor-pointer items-center gap-3 rounded-md p-2 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-300",
-                        selectedEmployee?.id === emp.id
+                        "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                        selectedGroupChat?.chat_id === group.chat_id
                           ? "bg-slate-500"
-                          : empUnread
-                          ? "bg-amber-400/20 hover:bg-amber-400/30"
+                          : groupUnread
+                          ? "bg-amber-400/20 text-amber-50 hover:bg-amber-400/30"
                           : "hover:bg-slate-600"
                       )}
                     >
-                      <Avatar className="h-9 w-9 shrink-0 ring-1 ring-border">
-                        <AvatarFallback className="bg-slate-500 text-xs font-semibold text-slate-50">
-                          {emp.name?.charAt(0)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1 min-w-0">
-                        <p className={cn("truncate text-sm", empUnread ? "font-semibold text-white" : "font-medium")}>{emp.name}</p>
-                        <p className="truncate text-xs text-slate-200">
-                          {emp.designation || emp.email}
-                        </p>
-                      </div>
-                      {empUnread && (
-                        empUnreadCount ? (
-                          <span
-                            className="ml-auto flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-semibold leading-none text-white"
-                            title={`${empUnreadCount} unread message${empUnreadCount === 1 ? "" : "s"}`}
-                          >
-                            {empUnreadCount > 99 ? "99+" : empUnreadCount}
-                          </span>
-                        ) : (
-                          <span className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" title="Unread messages" />
-                        )
+                      <Users2 className="h-4 w-4 shrink-0 text-slate-200" />
+                      <span className={cn("min-w-0 flex-1 truncate", groupUnread && "font-semibold")}>{group.name}</span>
+                      {groupUnread && (
+                        <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+                          •
+                        </span>
                       )}
-                    </div>
-                    );
-                  })}
-                </div>
+                    </button>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          ) : null}
+        </div>
       </ScrollArea>
 
       {missingEmailCount > 0 && (

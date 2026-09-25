@@ -6466,7 +6466,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                           if (task.id) params.set("taskId", String(task.id));
                                           if (task.taskName) params.set("taskName", String(task.taskName));
                                           if (allRecipientIds.length > 0) params.set("recipientIds", allRecipientIds.join(","));
-                                          if (preferredRecipientId && nonSelfRecipientIds.length === 1) {
+                                          if (preferredRecipientId) {
                                             params.set("employeeId", String(preferredRecipientId));
                                           }
                                           params.set("cliq", "1");
