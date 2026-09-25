@@ -77,6 +77,7 @@ const defaultKeyStepColumns: ColumnConfig[] = [
 export default function KeyStepsFullPage() {
   const { isFrozen, frozenProjectId, isItemFrozen, frozenItem, freezeProject, freezeItem, clearFreezeItem } = useFreeze();
   const [selectedKeystepIds, setSelectedKeystepIds] = useState<string[]>([]);
+  const [bulkStatusValue, setBulkStatusValue] = useState<KeyStep["status"]>("pending");
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickTitles, setQuickTitles] = useState<string[]>(Array.from({ length: 5 }).map(() => ""));
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -541,6 +542,58 @@ export default function KeyStepsFullPage() {
     } catch (err: any) {
       setKeySteps(prevSteps);
       toast({ variant: "destructive", title: "Couldn't update status", description: err?.message });
+    }
+  };
+
+  const bulkUpdateSelectedStatus = async (newStatus: KeyStep["status"]) => {
+    if (selectedKeystepIds.length === 0) return;
+    const ids = [...selectedKeystepIds];
+    const prev = keySteps;
+
+    setKeySteps((current) => current.map((step) => ids.includes(step.id) ? { ...step, status: newStatus } : step));
+
+    try {
+      const results = await Promise.all(ids.map(async (id) => {
+        const res = await apiFetch(`/api/key-steps/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: newStatus }),
+        });
+        if (!res.ok) throw new Error(`Failed to update key step ${id}`);
+        return res.json();
+      }));
+
+      const updatedMap = new Map(results.map((item) => [String(item.id), item]));
+      setKeySteps((current) => current.map((step) => {
+        const refreshed = updatedMap.get(String(step.id));
+        return refreshed ? { ...step, ...refreshed } : step;
+      }));
+      setSelectedKeystepIds([]);
+      toast({ title: "Status updated", description: `${ids.length} key step${ids.length > 1 ? "s" : ""} updated.` });
+    } catch (err: any) {
+      setKeySteps(prev);
+      toast({ variant: "destructive", title: "Couldn't update selected key steps", description: err?.message || "Please try again." });
+    }
+  };
+
+  const bulkDeleteSelected = async () => {
+    if (selectedKeystepIds.length === 0) return;
+    const ids = [...selectedKeystepIds];
+    if (!window.confirm(`Delete ${ids.length} selected key step${ids.length > 1 ? "s" : ""}?`)) return;
+
+    const prev = keySteps;
+    setKeySteps((current) => current.filter((step) => !ids.includes(step.id)));
+    setSelectedKeystepIds([]);
+
+    try {
+      await Promise.all(ids.map(async (id) => {
+        const res = await apiFetch(`/api/key-steps/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`Delete failed for key step ${id}`);
+      }));
+      toast({ title: "Deleted", description: `${ids.length} key step${ids.length > 1 ? "s" : ""} removed.` });
+    } catch (err: any) {
+      setKeySteps(prev);
+      toast({ variant: "destructive", title: "Delete failed", description: err?.message || "Please try again." });
     }
   };
 
@@ -1093,6 +1146,30 @@ export default function KeyStepsFullPage() {
         {hasActiveFilters && <p className="text-sm text-muted-foreground mb-2">Showing {sortedProcessedKeySteps.length} of {sortedKeySteps.length} key steps</p>}
         {!canReorder && sortedProcessedKeySteps.length > 1 && (
           <p className="text-xs text-muted-foreground mb-2 italic">Clear filters to enable drag-to-reorder for key steps.</p>
+        )}
+
+        {selectedKeystepIds.length > 0 && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <div className="text-sm font-medium text-amber-900">
+              {selectedKeystepIds.length} selected
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={bulkStatusValue}
+                onChange={(e) => setBulkStatusValue(e.target.value as KeyStep["status"])}
+                className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                <option value="pending">Pending</option>
+                <option value="not started">Not Started</option>
+                <option value="in-progress">In Progress</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <Button size="sm" variant="outline" onClick={() => bulkUpdateSelectedStatus(bulkStatusValue)}>Apply Status</Button>
+              <Button size="sm" variant="destructive" onClick={bulkDeleteSelected}>Delete</Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedKeystepIds([])}>Clear</Button>
+            </div>
+          </div>
         )}
 
         {/* Clone Modal */}

@@ -84,10 +84,7 @@ type DiscussionDetail = {
 export default function Discussion() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [activePageTab, setActivePageTab] = useState<"discussions" | "whatsapp" | "cliq">(() => {
-    const stored = sessionStorage.getItem("discussion_active_tab");
-    return stored === "whatsapp" || stored === "cliq" ? stored : "discussions";
-  });
+  const [activePageTab, setActivePageTab] = useState<"discussions" | "whatsapp" | "cliq">("discussions");
   const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null);
   const [cliqUnreadCount, setCliqUnreadCount] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
@@ -377,20 +374,30 @@ export default function Discussion() {
     );
   }, [discussions, searchTerm]);
 
-  // Set first discussion as active if none selected
-  useMemo(() => {
+  // Default to Discussions unless the URL explicitly asks for another tab.
+  useEffect(() => {
     const params = new URLSearchParams(location.search);
-    if (params.get("whatsapp") === "1") {
+    const wantsWhatsapp = params.get("whatsapp") === "1";
+    const wantsCliq = params.has("cliq");
+
+    if (wantsWhatsapp) {
       setActivePageTab("whatsapp");
       sessionStorage.setItem("discussion_active_tab", "whatsapp");
-    } else if (params.get("cliq")) {
+      return;
+    }
+
+    if (wantsCliq) {
       // Covers both an explicit tab-switch and the redirect back from
       // /api/cliq/callback (?cliq=connected|denied|error) — either way,
       // land on the Zoho Cliq tab. ZohoCliqPanel's own effect reads and
       // clears this same param to show the connect/disconnect toast.
       setActivePageTab("cliq");
       sessionStorage.setItem("discussion_active_tab", "cliq");
+      return;
     }
+
+    setActivePageTab("discussions");
+    sessionStorage.setItem("discussion_active_tab", "discussions");
   }, [location.search]);
 
   const switchPageTab = (tab: "discussions" | "whatsapp" | "cliq") => {
