@@ -374,11 +374,15 @@ export default function Discussion() {
     );
   }, [discussions, searchTerm]);
 
-  // Default to Discussions unless the URL explicitly asks for another tab.
+  // Default to Zoho Cliq when opening the Discussions page, unless the URL
+  // explicitly asks for another tab. This keeps the first tab aligned with the
+  // product requirement and still allows a user to switch back to WhatsApp or
+  // Discussions manually.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const wantsWhatsapp = params.get("whatsapp") === "1";
     const wantsCliq = params.has("cliq");
+    const wantsDiscussions = params.get("tab") === "discussions";
 
     if (wantsWhatsapp) {
       setActivePageTab("whatsapp");
@@ -387,17 +391,19 @@ export default function Discussion() {
     }
 
     if (wantsCliq) {
-      // Covers both an explicit tab-switch and the redirect back from
-      // /api/cliq/callback (?cliq=connected|denied|error) — either way,
-      // land on the Zoho Cliq tab. ZohoCliqPanel's own effect reads and
-      // clears this same param to show the connect/disconnect toast.
       setActivePageTab("cliq");
       sessionStorage.setItem("discussion_active_tab", "cliq");
       return;
     }
 
-    setActivePageTab("discussions");
-    sessionStorage.setItem("discussion_active_tab", "discussions");
+    if (wantsDiscussions) {
+      setActivePageTab("discussions");
+      sessionStorage.setItem("discussion_active_tab", "discussions");
+      return;
+    }
+
+    setActivePageTab("cliq");
+    sessionStorage.setItem("discussion_active_tab", "cliq");
   }, [location.search]);
 
   const switchPageTab = (tab: "discussions" | "whatsapp" | "cliq") => {
