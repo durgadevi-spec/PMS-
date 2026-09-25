@@ -1,13 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, MessageCircle, ExternalLink, Users2, Link2, Unlink, Loader2, Send, RefreshCw, Paperclip, Hash, X, ChevronDown } from "lucide-react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
+import { Search, MessageCircle, ExternalLink, Users2, Link2, Unlink, Loader2, Send, RefreshCw, Paperclip, Hash, X, ChevronDown, ListTodo, Check } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { apiFetch } from "@/lib/apiClient";
 import { CLIQ_BASE_URL, buildCliqUserDeepLink } from "@/lib/cliqConfig";
-import { connectCliq, deleteCliqMessage, disconnectCliqAccount, downloadCliqFile, getCliqChannelThreads, getCliqChannels, getCliqChatForEmail, getCliqChats, getCliqMessages, getCliqStatus, sendCliqChannelMessage, sendCliqChatMessage, sendCliqMessage, sendCliqThreadMessage, type CliqChannel, type CliqChat, type CliqMessage, type CliqThread, uploadCliqChannelFile, uploadCliqChatFile, uploadCliqFile } from "@/lib/cliqApi";
+import { connectCliq, deleteCliqMessage, disconnectCliqAccount, downloadCliqFile, getCliqChannelThreads, getCliqChannels, getCliqChatForEmail, getCliqChats, getCliqDirectChatEmails, getCliqMessages, getCliqStatus, sendCliqChannelMessage, sendCliqChatMessage, sendCliqMessage, sendCliqThreadMessage, type CliqChannel, type CliqChat, type CliqMessage, type CliqThread, uploadCliqChannelFile, uploadCliqChatFile, uploadCliqFile } from "@/lib/cliqApi";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -84,15 +96,87 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
   // collapsed without also leaving/deselecting the channel itself.
   const [expandedChannelId, setExpandedChannelId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [contextReplyText, setContextReplyText] = useState("");
   const [sending, setSending] = useState(false);
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isAskAboutOpen, setIsAskAboutOpen] = useState(false);
+  const [askProjectId, setAskProjectId] = useState("");
+  const [askTaskIds, setAskTaskIds] = useState<string[]>([]);
+  const [projectSearchTerm, setProjectSearchTerm] = useState("");
+  const [taskSearchTerm, setTaskSearchTerm] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageListEndRef = useRef<HTMLDivElement>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<Record<string, CliqMessage[]>>({});
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const userEditedCliqDraftRef = useRef(false);
+
+  const clearTaskContextFromUrl = () => {
+    const url = new URL(window.location.href);
+    ["projectId", "projectTitle", "keyStepId", "keyStepTitle", "taskId", "taskName", "subtaskName", "employeeId", "recipientIds"].forEach((key) => {
+      url.searchParams.delete(key);
+    });
+    window.history.replaceState({}, "", `${url.pathname}${url.search ? `?${url.searchParams.toString()}` : ""}`);
+  };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const employeeId = params.get("employeeId");
+    const hasTaskContext = !!(params.get("projectTitle") || params.get("taskName") || params.get("keyStepTitle") || params.get("subtaskName"));
+
+    if (!employeeId) {
+      if (!hasTaskContext) {
+        setDraft("");
+        setContextReplyText("");
+        userEditedCliqDraftRef.current = false;
+      }
+      return;
+    }
+
+    if (String(employeeId) === String(currentEmployeeId) || String(employeeId) === String(currentEmployeeId ?? "")) {
+      setSelectedEmployee(null);
+      return;
+    }
+
+    const employee = employees.find((item) => String(item.id) === String(employeeId));
+    if (!employee) return;
+
+    setSelectedEmployee(employee);
+    setSelectedThread(null);
+    setSelectedChannel(null);
+    setSelectedGroupChat(null);
+    setSelectedFile(null);
+    userEditedCliqDraftRef.current = false;
+  }, [location.search, employees, currentEmployeeId]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const projectTitle = params.get("projectTitle") || "";
+    const taskName = params.get("taskName") || "";
+    const keyStepTitle = params.get("keyStepTitle") || "";
+    const subtaskName = params.get("subtaskName") || "";
+
+    if (!projectTitle && !taskName && !keyStepTitle && !subtaskName) {
+      setDraft("");
+      setContextReplyText("");
+      userEditedCliqDraftRef.current = false;
+      return;
+    }
+
+    if (!selectedEmployee || userEditedCliqDraftRef.current) return;
+
+    const contextText = [projectTitle && `Project: ${projectTitle}`, taskName && `Task: ${taskName}`, keyStepTitle && `Key Step: ${keyStepTitle}`, subtaskName && `Subtask: ${subtaskName}`]
+      .filter(Boolean)
+      .join(" | ");
+
+    const autoContext = contextText ? `[${contextText}]` : "";
+    setContextReplyText(autoContext);
+    setDraft("");
+    userEditedCliqDraftRef.current = false;
+  }, [location.search, selectedEmployee]);
 
   // Connection status only (Phase 2, Slice 1). No polling, no interval, no
   // refetch-on-focus — this is a manual/one-shot check, same discipline the
@@ -105,16 +189,19 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     refetchOnWindowFocus: false,
   });
 
+  const shouldPollCliq = !!cliqStatus?.connected;
+  const cliqPollingInterval: number | false = shouldPollCliq ? 20 * 1000 : false;
+
   const { data: chatsData, isLoading: chatsLoading } = useQuery({
     queryKey: ["cliq-chats"],
     queryFn: getCliqChats,
-    enabled: !!cliqStatus?.connected,
+    enabled: shouldPollCliq,
     staleTime: 30 * 1000,
     // Unlike the one-shot status check above, this list needs to notice
     // new incoming messages on its own — otherwise the unread badge would
     // only ever update when this panel happens to remount (e.g. switching
     // page tabs away and back).
-    refetchInterval: cliqStatus?.connected ? 20 * 1000 : false,
+    refetchInterval: cliqPollingInterval,
   });
 
   // Per-chat "last opened" timestamps used to derive unread state — see the
@@ -130,9 +217,11 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
   const markCliqChatRead = (chatId?: string | null) => {
     if (!chatId) return;
     setCliqLastReadMap((current) => {
-      const now = Date.now();
-      if ((current[chatId] ?? 0) >= now) return current;
-      const next = { ...current, [chatId]: now };
+      const currentChat = chatsData?.chats?.find((chat) => chat.chat_id === chatId);
+      const lastMessageTime = currentChat ? getCliqChatLastMessageTime(currentChat) : Date.now();
+      const nextReadAt = Math.max(current[chatId] ?? 0, lastMessageTime || Date.now());
+      if (current[chatId] === nextReadAt) return current;
+      const next = { ...current, [chatId]: nextReadAt };
       saveCliqLastReadMap(currentEmployeeId, next);
       return next;
     });
@@ -150,6 +239,19 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     queryFn: () => getCliqChannelThreads(selectedChannel!.channel_id),
     enabled: !!selectedChannel?.channel_id,
     staleTime: 30 * 1000,
+  });
+
+  // Authoritative source for the teammate list's per-row unread dot: real
+  // Cliq chat membership (same lookup /chat-for-email uses for the open
+  // conversation), resolved once for every direct chat instead of per
+  // employee. This is what lets a row's dot show up correctly even when
+  // the teammate's Cliq display name doesn't match their PMS name.
+  const { data: directChatEmailsData } = useQuery({
+    queryKey: ["cliq-direct-chat-emails"],
+    queryFn: getCliqDirectChatEmails,
+    enabled: shouldPollCliq,
+    staleTime: 30 * 1000,
+    refetchInterval: cliqPollingInterval,
   });
 
   const { data: selectedChatData, isLoading: chatLookupLoading } = useQuery({
@@ -196,57 +298,155 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     return lastMessageTime > (cliqLastReadMap[chat.chat_id] ?? 0);
   };
 
+  // Names coming out of Cliq vs. the PMS employee record often carry small,
+  // cosmetic differences that a raw string === would choke on — an initial
+  // written as "S." vs "S ", double spaces, or the first/last name written
+  // in a different order ("S.Naveen Kumar" vs "Naveen Kumar S"). Strip
+  // punctuation/whitespace noise for the exact check, and keep a
+  // word-set comparison as a second pass so reordered names still match.
+  const normalizeForMatch = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[.,]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const wordSetForMatch = (value: string) =>
+    new Set(normalizeForMatch(value).split(" ").filter(Boolean));
+
+  const namesRefersToSamePerson = (nameA: string, nameB: string) => {
+    if (!nameA || !nameB) return false;
+    if (normalizeForMatch(nameA) === normalizeForMatch(nameB)) return true;
+
+    // Word-set match: same words present on both sides (ignoring order),
+    // and at least two words so a single shared initial can't match.
+    const wordsA = wordSetForMatch(nameA);
+    const wordsB = wordSetForMatch(nameB);
+    if (wordsA.size < 2 || wordsB.size < 2) return false;
+    if (wordsA.size !== wordsB.size) return false;
+    for (const word of wordsA) {
+      if (!wordsB.has(word)) return false;
+    }
+    return true;
+  };
+
   // Last-resort fallback ONLY: the accurate match is getCliqChatForEmail,
   // which checks real chat membership by email on the server. This fallback
   // only runs once that lookup has finished and found nothing (see
   // selectedChat below) — it must never race ahead of it. Because it's a
-  // last resort, require a strict full-name or exact-email-prefix match
+  // last resort, require a full-name or exact-email-prefix match (allowing
+  // for punctuation/word-order noise, see namesRefersToSamePerson above)
   // rather than loose single-token substring matching, which could match
   // an unrelated chat (e.g. a short token like an initial matching almost
   // any chat name).
   const fallbackDirectChat = useMemo(() => {
     if (!selectedEmployee || !chatsData?.chats) return null;
 
-    const targetName = (selectedEmployee.name || "").trim().toLowerCase();
+    const targetName = (selectedEmployee.name || "").trim();
     const targetEmailPrefix = (selectedEmployee.email || "").split("@")[0].trim().toLowerCase();
     if (!targetName && !targetEmailPrefix) return null;
 
     const candidates = chatsData.chats.filter((chat) => {
       if (!isDirectCliqChat(chat)) return false;
 
-      const chatName = (chat.name || "").trim().toLowerCase();
+      const chatName = (chat.name || "").trim();
       if (!chatName) return false;
 
-      return chatName === targetName || (!!targetEmailPrefix && chatName === targetEmailPrefix);
+      return (
+        namesRefersToSamePerson(chatName, targetName) ||
+        (!!targetEmailPrefix && chatName.trim().toLowerCase() === targetEmailPrefix)
+      );
     });
 
-    // If more than one chat matches exactly, we can't safely tell them
-    // apart by name alone — better to show nothing than the wrong person's
+    // If more than one chat matches, we can't safely tell them apart by
+    // name alone — better to show nothing than the wrong person's
     // conversation.
     return candidates.length === 1 ? candidates[0] : null;
   }, [chatsData, selectedEmployee]);
 
-  // Same exact-match heuristic as fallbackDirectChat above, but run across
-  // every teammate up front so each row in the list can show its own
-  // unread badge without a per-employee server lookup.
+  // Same match heuristic as fallbackDirectChat above, but run across every
+  // teammate up front so each row in the list can show its own unread
+  // badge without a per-employee server lookup.
+  //
+  // Primary source: directChatEmailsData, which resolves each direct
+  // chat's other participant by actual Cliq membership on the server
+  // (see /api/cliq/direct-chat-emails) — this is accurate regardless of
+  // what the chat happens to be *named*. Only employees an email lookup
+  // didn't resolve (e.g. the bulk lookup hasn't loaded yet, or the
+  // teammate has no confirmed membership match) fall back to the
+  // heuristic name/email-prefix match against the chat name.
   const employeeCliqChatMap = useMemo(() => {
     const map: Record<string, CliqChat> = {};
     if (!chatsData?.chats) return map;
     const directChats = chatsData.chats.filter(isDirectCliqChat);
+    const chatsById = new Map(directChats.map((chat) => [chat.chat_id, chat]));
+
+    const chatIdByEmail = new Map<string, string>();
+    for (const entry of directChatEmailsData?.entries || []) {
+      if (entry.chat_id && entry.email) chatIdByEmail.set(entry.email, entry.chat_id);
+    }
+
     for (const emp of employees) {
-      const targetName = (emp.name || "").trim().toLowerCase();
-      const targetEmailPrefix = (emp.email || "").split("@")[0].trim().toLowerCase();
+      const targetEmail = (emp.email || "").trim().toLowerCase();
+      const viaEmail = targetEmail ? chatIdByEmail.get(targetEmail) : undefined;
+      if (viaEmail && chatsById.has(viaEmail)) {
+        map[emp.id] = chatsById.get(viaEmail)!;
+        continue;
+      }
+
+      const targetName = (emp.name || "").trim();
+      const targetEmailPrefix = targetEmail.split("@")[0];
       if (!targetName && !targetEmailPrefix) continue;
       const candidates = directChats.filter((chat) => {
-        const chatName = (chat.name || "").trim().toLowerCase();
+        const chatName = (chat.name || "").trim();
         if (!chatName) return false;
-        return chatName === targetName || (!!targetEmailPrefix && chatName === targetEmailPrefix);
+        return (
+          namesRefersToSamePerson(chatName, targetName) ||
+          (!!targetEmailPrefix && chatName.trim().toLowerCase() === targetEmailPrefix)
+        );
       });
       if (candidates.length === 1) map[emp.id] = candidates[0];
     }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatsData, employees]);
+  }, [chatsData, directChatEmailsData, employees]);
+
+  // The chats list only tells us a chat *has* unread activity, not how
+  // many messages are unread — Cliq's /chats endpoint doesn't return a
+  // count (see the note above isCliqChatUnread). To show an actual number
+  // next to a teammate's name instead of just a dot, fetch the message
+  // list for only the chats that are currently unread (typically a
+  // handful, not every chat) and count how many landed after this chat
+  // was last marked read.
+  const unreadChatIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const chat of chatsData?.chats ?? []) {
+      if (chat.chat_id && isCliqChatUnread(chat)) ids.add(chat.chat_id);
+    }
+    return Array.from(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatsData, cliqLastReadMap]);
+
+  const unreadChatMessagesQueries = useQueries({
+    queries: unreadChatIds.map((chatId) => ({
+      queryKey: ["cliq-unread-count-messages", chatId],
+      queryFn: () => getCliqMessages(chatId),
+      enabled: shouldPollCliq,
+      staleTime: 15 * 1000,
+      refetchInterval: cliqPollingInterval,
+    })),
+  });
+
+  const unreadCountByChatId = useMemo(() => {
+    const counts: Record<string, number> = {};
+    unreadChatIds.forEach((chatId, index) => {
+      const lastRead = cliqLastReadMap[chatId] ?? 0;
+      const messages = unreadChatMessagesQueries[index]?.data?.data || [];
+      counts[chatId] = messages.filter((message) => (message.time ?? 0) > lastRead).length;
+    });
+    return counts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unreadChatIds, unreadChatMessagesQueries, cliqLastReadMap]);
 
   const cliqUnreadCount = useMemo(() => {
     if (!chatsData?.chats) return 0;
@@ -389,6 +589,9 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     setSelectedChannel(null);
     setSelectedGroupChat(null);
     setSelectedFile(null);
+    setContextReplyText("");
+    setDraft("");
+    userEditedCliqDraftRef.current = false;
   };
 
   const openCliqChannel = (channel: CliqChannel) => {
@@ -416,26 +619,78 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
     setSelectedFile(null);
   };
 
+  const { data: projects = [], isLoading: loadingProjects } = useQuery<any[]>({
+    queryKey: ["/api/projects?status=active"],
+    queryFn: async () => {
+      const res = await apiFetch("/api/projects?status=active");
+      return res.ok ? res.json() : [];
+    },
+  });
+
+  const { data: projectTasks = [], isLoading: loadingProjectTasks } = useQuery<any[]>({
+    queryKey: [`/api/tasks/${askProjectId}?status=active`],
+    queryFn: async () => {
+      if (!askProjectId) return [];
+      const res = await apiFetch(`/api/tasks/${askProjectId}?status=active`);
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!askProjectId,
+  });
+
+  const filteredProjects = useMemo(() => {
+    const term = projectSearchTerm.trim().toLowerCase();
+    if (!term) return projects;
+    return projects.filter((project) => {
+      const title = (project.title || "").toLowerCase();
+      const code = (project.projectCode || "").toLowerCase();
+      return title.includes(term) || code.includes(term);
+    });
+  }, [projects, projectSearchTerm]);
+
+  const filteredTasks = useMemo(() => {
+    const term = taskSearchTerm.trim().toLowerCase();
+    if (!term) return projectTasks;
+    return projectTasks.filter((task) => {
+      const taskName = (task.taskName || "").toLowerCase();
+      const taskCode = (task.taskCode || "").toLowerCase();
+      return taskName.includes(term) || taskCode.includes(term);
+    });
+  }, [projectTasks, taskSearchTerm]);
+
+  const handleApplyTaskContext = () => {
+    const project = projects.find((item) => String(item.id) === String(askProjectId));
+    const selectedTasks = projectTasks.filter((item) => askTaskIds.includes(String(item.id)));
+    const projectText = project ? `Project: ${project.title}${project.projectCode ? ` (${project.projectCode})` : ""}` : "";
+    const tasksText = selectedTasks.length > 0 ? `Tasks: ${selectedTasks.map((task) => task.taskName).join(", ")}` : "";
+    const reference = [projectText, tasksText].filter(Boolean).join(" | ");
+    setContextReplyText(reference ? `[${reference}]` : "");
+    setDraft("");
+    setAskProjectId("");
+    setAskTaskIds([]);
+    setIsAskAboutOpen(false);
+  };
+
   const handleSend = async () => {
-    if ((!selectedEmployee?.email && !selectedChannel && !selectedGroupChat && !selectedThread) || (!draft.trim() && !selectedFile) || sending) return;
+    if ((!selectedEmployee?.email && !selectedChannel && !selectedGroupChat && !selectedThread) || (!draft.trim() && !selectedFile && !contextReplyText) || sending) return;
     setSending(true);
     setUploadingFile(!!selectedFile);
     try {
       const text = draft.trim();
-      if (text) {
+      const fullText = contextReplyText && text ? `${contextReplyText}\n${text}` : text || contextReplyText;
+      if (fullText) {
         const response = selectedThread?.chat_id
-          ? await sendCliqThreadMessage(selectedThread.chat_id, text)
+          ? await sendCliqThreadMessage(selectedThread.chat_id, fullText)
           : selectedChannel?.channel_id
-          ? await sendCliqChannelMessage(selectedChannel.channel_id, text)
+          ? await sendCliqChannelMessage(selectedChannel.channel_id, fullText)
           : selectedGroupChat?.chat_id
-            ? await sendCliqChatMessage(selectedGroupChat.chat_id, text)
-          : await sendCliqMessage(selectedEmployee!.email!, text);
+            ? await sendCliqChatMessage(selectedGroupChat.chat_id, fullText)
+          : await sendCliqMessage(selectedEmployee!.email!, fullText);
         const message: CliqMessage = {
           id: response?.message_id || `local-${Date.now()}`,
           time: Date.now(),
           type: "text",
           sender: { name: "You" },
-          content: { text },
+          content: { text: fullText },
         };
         setOptimisticMessages((current) => ({
           ...current,
@@ -456,6 +711,9 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
         setSelectedFile(null);
       }
       setDraft("");
+      setContextReplyText("");
+      userEditedCliqDraftRef.current = false;
+      clearTaskContextFromUrl();
       await queryClient.invalidateQueries({ queryKey: ["cliq-chats"] });
       if (selectedEmployee?.email) await queryClient.invalidateQueries({ queryKey: ["cliq-chat-for-email", selectedEmployee.email] });
       await refetchMessages();
@@ -762,7 +1020,14 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
                 </div>
                 <div className="space-y-1">
                   {members.map((emp) => {
-                    const empUnread = isCliqChatUnread(employeeCliqChatMap[emp.id]);
+                    const empChat = employeeCliqChatMap[emp.id];
+                    const empUnread = isCliqChatUnread(empChat);
+                    // The count query only kicks off once we know the
+                    // chat is unread (see unreadDirectChatIds), so right
+                    // after a new message arrives it may still be
+                    // loading — fall back to a plain dot for that brief
+                    // window instead of showing "0".
+                    const empUnreadCount = empChat ? unreadCountByChatId[empChat.chat_id] : undefined;
                     return (
                     <div
                       key={emp.id}
@@ -796,7 +1061,16 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
                         </p>
                       </div>
                       {empUnread && (
-                        <span className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" title="Unread messages" />
+                        empUnreadCount ? (
+                          <span
+                            className="ml-auto flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-semibold leading-none text-white"
+                            title={`${empUnreadCount} unread message${empUnreadCount === 1 ? "" : "s"}`}
+                          >
+                            {empUnreadCount > 99 ? "99+" : empUnreadCount}
+                          </span>
+                        ) : (
+                          <span className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" title="Unread messages" />
+                        )
                       )}
                     </div>
                     );
@@ -833,7 +1107,128 @@ export default function ZohoCliqPanel({ employees, currentEmployeeId, onUnreadCo
             <div className="absolute bottom-0 left-0 right-0 z-10 border-t bg-background p-3">
               <input ref={fileInputRef} type="file" className="hidden" onChange={handleUpload} />
               {selectedFile && <div className="mb-2 flex items-center justify-between rounded border bg-muted/30 px-2 py-1 text-xs"><span className="truncate">Attached: {selectedFile.name}</span><Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => setSelectedFile(null)}>Remove</Button></div>}
-              <div className="flex items-end gap-2"><Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={!cliqStatus?.connected || sending} title="Attach file">{uploadingFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}</Button><Input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void handleSend(); } }} placeholder={`Message ${selectedTitle}...`} disabled={!cliqStatus?.connected || sending} /><Button size="icon" onClick={() => void handleSend()} disabled={(!draft.trim() && !selectedFile) || sending} title="Send message">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button></div>
+              {contextReplyText && (
+                <div className="mb-2 rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs text-slate-600">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="font-medium text-slate-700">Task reference</span>
+                    <button type="button" className="text-[10px] text-slate-500 hover:text-slate-700" onClick={() => {
+                      setContextReplyText("");
+                      setDraft("");
+                      clearTaskContextFromUrl();
+                      userEditedCliqDraftRef.current = false;
+                    }}>
+                      Clear
+                    </button>
+                  </div>
+                  <p className="whitespace-pre-wrap break-words text-slate-600">{contextReplyText}</p>
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <Dialog open={isAskAboutOpen} onOpenChange={setIsAskAboutOpen}>
+                  <DialogTrigger asChild>
+                    <Button type="button" variant="outline" size="icon" title="Select project or task to reference" disabled={!cliqStatus?.connected || sending}>
+                      <ListTodo className="h-4 w-4" />
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-xl overflow-hidden p-0">
+                    <div className="border-b px-6 py-4">
+                      <DialogHeader className="space-y-1">
+                        <DialogTitle className="text-lg font-semibold">Select a project and task</DialogTitle>
+                        <DialogDescription className="text-sm text-slate-600">Choose the work item to reference in the message.</DialogDescription>
+                      </DialogHeader>
+                    </div>
+                    <div className="max-h-[72vh] overflow-y-auto px-6 py-4">
+                      <div className="space-y-5">
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-slate-700">Project</label>
+                          <div className="relative">
+                            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                            <Input
+                              value={projectSearchTerm}
+                              onChange={(event) => setProjectSearchTerm(event.target.value)}
+                              placeholder="Search project..."
+                              className="h-9 pl-9 text-sm"
+                            />
+                          </div>
+                          <div className="grid max-h-[220px] gap-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+                            {loadingProjects ? (
+                              <div className="text-sm text-muted-foreground">Loading projects…</div>
+                            ) : filteredProjects.length === 0 ? (
+                              <div className="text-sm text-muted-foreground">No projects available</div>
+                            ) : (
+                              filteredProjects.map((project) => (
+                                <button
+                                  key={project.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setAskProjectId(String(project.id));
+                                    setAskTaskIds([]);
+                                    setTaskSearchTerm("");
+                                  }}
+                                  className={cn(
+                                    "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                                    askProjectId === String(project.id) ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white hover:bg-slate-100"
+                                  )}
+                                >
+                                  <span className="truncate">{project.title}</span>
+                                  {askProjectId === String(project.id) && <Check className="h-4 w-4" />}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        {askProjectId && (
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-slate-700">Tasks</label>
+                            <div className="relative">
+                              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                              <Input
+                                value={taskSearchTerm}
+                                onChange={(event) => setTaskSearchTerm(event.target.value)}
+                                placeholder="Search task..."
+                                className="h-9 pl-9 text-sm"
+                              />
+                            </div>
+                            <div className="grid max-h-[260px] gap-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+                              {loadingProjectTasks ? (
+                                <div className="text-sm text-muted-foreground">Loading tasks…</div>
+                              ) : filteredTasks.length === 0 ? (
+                                <div className="text-sm text-muted-foreground">No tasks found</div>
+                              ) : (
+                                filteredTasks.map((task) => {
+                                  const checked = askTaskIds.includes(String(task.id));
+                                  return (
+                                    <label key={task.id} className="flex cursor-pointer items-center gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50">
+                                      <Checkbox
+                                        checked={checked}
+                                        onCheckedChange={() => {
+                                          setAskTaskIds((current) =>
+                                            checked ? current.filter((id) => id !== String(task.id)) : [...current, String(task.id)]
+                                          );
+                                        }}
+                                      />
+                                      <span className="flex-1 truncate">{task.taskName}</span>
+                                    </label>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <DialogFooter className="border-t bg-slate-50 px-6 py-3">
+                      <Button type="button" variant="outline" onClick={() => setIsAskAboutOpen(false)}>
+                        Cancel
+                      </Button>
+                      <Button type="button" onClick={handleApplyTaskContext} disabled={!askProjectId && askTaskIds.length === 0}>
+                        Add reference
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={!cliqStatus?.connected || sending} title="Attach file">{uploadingFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}</Button><Input value={draft} onChange={(event) => { userEditedCliqDraftRef.current = true; setDraft(event.target.value); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void handleSend(); } }} placeholder={`Type your message to ${selectedTitle}...`} disabled={!cliqStatus?.connected || sending} /><Button size="icon" onClick={() => void handleSend()} disabled={(!draft.trim() && !selectedFile && !contextReplyText) || sending} title="Send message">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button></div>
             </div>
           </>
         ) : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a teammate to open a conversation.</div>}

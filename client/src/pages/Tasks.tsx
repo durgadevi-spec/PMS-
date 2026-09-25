@@ -6344,56 +6344,102 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                   </Button>
                                 )}
 
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  className="h-6 w-6 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
-                                  onClick={() => {
-                                    const proj = projects.find(p => String(p.id) === String(task.projectId));
-                                    const projectTitle = proj?.title || "";
-                                    const keyStep = keySteps.find(k => String(k.id) === String(task.keyStepId));
-                                    const keyStepTitle = keyStep?.title || "";
-                                    const params = new URLSearchParams();
-                                    if (task.projectId) params.set("projectId", String(task.projectId));
-                                    if (projectTitle) params.set("projectTitle", String(projectTitle));
-                                    if (task.keyStepId) params.set("keyStepId", String(task.keyStepId));
-                                    if (keyStepTitle) params.set("keyStepTitle", String(keyStepTitle));
-                                    if (task.id) params.set("taskId", String(task.id));
-                                    if (task.taskName) params.set("taskName", String(task.taskName));
-                                    // Navigate to discussion with metadata so Discussion can open the right thread
-                                    navigate(`/discussion?${params.toString()}`);
-                                  }}
-                                  title="Discuss Task"
-                                >
-                                  <MessageSquare size={12} />
-                                </Button>
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                      title="Discuss / contact"
+                                    >
+                                      <MessageSquare size={12} />
+                                    </Button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-44 p-2" align="end" onOpenAutoFocus={(e) => e.preventDefault()}>
+                                    <div className="space-y-1">
+                                      <Button
+                                        variant="ghost"
+                                        className="h-8 w-full justify-start gap-2 px-2 text-xs"
+                                        onClick={() => {
+                                          const proj = projects.find(p => String(p.id) === String(task.projectId));
+                                          const projectTitle = proj?.title || "";
+                                          const keyStep = keySteps.find(k => String(k.id) === String(task.keyStepId));
+                                          const keyStepTitle = keyStep?.title || "";
+                                          const params = new URLSearchParams();
+                                          if (task.projectId) params.set("projectId", String(task.projectId));
+                                          if (projectTitle) params.set("projectTitle", String(projectTitle));
+                                          if (task.keyStepId) params.set("keyStepId", String(task.keyStepId));
+                                          if (keyStepTitle) params.set("keyStepTitle", String(keyStepTitle));
+                                          if (task.id) params.set("taskId", String(task.id));
+                                          if (task.taskName) params.set("taskName", String(task.taskName));
+                                          navigate(`/discussion?${params.toString()}`);
+                                        }}
+                                      >
+                                        <MessageSquare size={12} />
+                                        Discuss
+                                      </Button>
 
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  className="h-6 w-6 text-green-600 hover:text-green-700 hover:bg-green-50"
-                                  disabled={!task.taskOwnerId && !(task.taskMembers && task.taskMembers.length > 0)}
-                                  onClick={() => {
-                                    const recipientIds = Array.from(new Set([
-                                      task.taskOwnerId,
-                                      ...(task.taskMembers || []),
-                                    ].filter(Boolean).map(String)));
-                                    const recipientId = recipientIds[0];
-                                    if (!recipientId) return;
-                                    const taskProject = projects.find((p) => String(p.id) === String(task.projectId));
-                                    const params = new URLSearchParams({
-                                      whatsapp: "1",
-                                      employeeId: String(recipientId),
-                                      recipientIds: recipientIds.join(","),
-                                      taskName: task.taskName,
-                                      projectTitle: taskProject?.title || "",
-                                    });
-                                    navigate(`/discussion?${params.toString()}`);
-                                  }}
-                                  title={task.taskOwnerId || (task.taskMembers && task.taskMembers.length > 0) ? "Ask assignee on WhatsApp" : "Assign a task owner or member first"}
-                                >
-                                  <MessageCircle size={12} />
-                                </Button>
+                                      <Button
+                                        variant="ghost"
+                                        className="h-8 w-full justify-start gap-2 px-2 text-xs"
+                                        disabled={!task.taskOwnerId && !(task.taskMembers && task.taskMembers.length > 0)}
+                                        onClick={() => {
+                                          const recipientIds = Array.from(new Set([
+                                            task.taskOwnerId,
+                                            ...(task.taskMembers || []),
+                                          ].filter(Boolean).map(String)));
+                                          const recipientId = recipientIds[0];
+                                          if (!recipientId) return;
+                                          const taskProject = projects.find((p) => String(p.id) === String(task.projectId));
+                                          const params = new URLSearchParams({
+                                            whatsapp: "1",
+                                            employeeId: String(recipientId),
+                                            recipientIds: recipientIds.join(","),
+                                            taskName: task.taskName,
+                                            projectTitle: taskProject?.title || "",
+                                          });
+                                          navigate(`/discussion?${params.toString()}`);
+                                        }}
+                                      >
+                                        <MessageCircle size={12} className="text-green-600" />
+                                        WhatsApp
+                                      </Button>
+
+                                      <Button
+                                        variant="ghost"
+                                        className="h-8 w-full justify-start gap-2 px-2 text-xs"
+                                        onClick={() => {
+                                          const proj = projects.find(p => String(p.id) === String(task.projectId));
+                                          const projectTitle = proj?.title || "";
+                                          const keyStep = keySteps.find(k => String(k.id) === String(task.keyStepId));
+                                          const keyStepTitle = keyStep?.title || "";
+                                          const allRecipientIds = Array.from(new Set([
+                                            task.taskOwnerId,
+                                            ...(task.taskMembers || []),
+                                          ].filter(Boolean).map(String)));
+                                          const nonSelfRecipientIds = allRecipientIds.filter((id) => String(id) !== String(user?.employeeId) && String(id) !== String(user?.id));
+                                          const preferredRecipientId = nonSelfRecipientIds[0] || null;
+                                          const params = new URLSearchParams();
+                                          if (task.projectId) params.set("projectId", String(task.projectId));
+                                          if (projectTitle) params.set("projectTitle", String(projectTitle));
+                                          if (task.keyStepId) params.set("keyStepId", String(task.keyStepId));
+                                          if (keyStepTitle) params.set("keyStepTitle", String(keyStepTitle));
+                                          if (task.id) params.set("taskId", String(task.id));
+                                          if (task.taskName) params.set("taskName", String(task.taskName));
+                                          if (allRecipientIds.length > 0) params.set("recipientIds", allRecipientIds.join(","));
+                                          if (preferredRecipientId && nonSelfRecipientIds.length === 1) {
+                                            params.set("employeeId", String(preferredRecipientId));
+                                          }
+                                          params.set("cliq", "1");
+                                          navigate(`/discussion?${params.toString()}`);
+                                        }}
+                                      >
+                                        <MessageCircle size={12} className="text-blue-600" />
+                                        Cliq
+                                      </Button>
+                                    </div>
+                                  </PopoverContent>
+                                </Popover>
 
                                 <Button
                                   size="icon"

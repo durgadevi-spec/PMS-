@@ -30,6 +30,7 @@ import {
   Ticket,
   GanttChartSquare,
   Copy,
+  Snowflake,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -142,7 +143,7 @@ const defaultProjectColumns: ColumnConfig[] = [
 ];
 
 export default function Projects() {
-  const { isFrozen, frozenProjectId } = useFreeze();
+  const { isFrozen, frozenProjectId, freezeProject, clearFreeze } = useFreeze();
   const { toast } = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN" || user?.employeeCode === "E0001";
@@ -1268,6 +1269,26 @@ export default function Projects() {
     return sortedProjects.findIndex(x => x.id === a.id) - sortedProjects.findIndex(x => x.id === b.id);
   });
 
+  const handleFreezeProjectRow = (project: any) => {
+    const projectName = project?.title || project?.name || "Untitled Project";
+    const isCurrentProjectFrozen = String(frozenProjectId) === String(project.id);
+
+    if (isCurrentProjectFrozen) {
+      clearFreeze();
+      toast({
+        title: "Freeze Cleared",
+        description: `"${projectName}" is no longer frozen.`,
+      });
+      return;
+    }
+
+    freezeProject({ id: project.id, name: projectName });
+    toast({
+      title: "Project Frozen",
+      description: `"${projectName}" is now your active context across all pages.`,
+    });
+  };
+
   useEffect(() => {
     localStorage.setItem("projects_sort_key", sortKey);
     localStorage.setItem("projects_sort_dir", sortDir);
@@ -2112,6 +2133,23 @@ export default function Projects() {
                               Tasks: {taskCount}
                             </Badge>
                           )}
+                          <Button
+                            variant={String(frozenProjectId) === String(project.id) ? "default" : "ghost"}
+                            size="icon"
+                            className={cn(
+                              "h-6 w-6",
+                              String(frozenProjectId) === String(project.id)
+                                ? "bg-sky-600 hover:bg-sky-700 text-white"
+                                : "border-slate-200 hover:bg-sky-50 hover:border-sky-300 hover:text-sky-700"
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleFreezeProjectRow(project);
+                            }}
+                            title={String(frozenProjectId) === String(project.id) ? `Frozen: ${project.title}` : "Freeze this project"}
+                          >
+                            <Snowflake className="h-3.5 w-3.5" />
+                          </Button>
                           <Button
                             variant="outline"
                             size="icon"

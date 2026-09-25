@@ -21,6 +21,7 @@ import {
   Bookmark,
   FolderOpen,
   GripVertical,
+  Snowflake,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { KeyStepFilters, CustomFilter } from "@/components/KeyStepFilters";
@@ -74,7 +75,7 @@ const defaultKeyStepColumns: ColumnConfig[] = [
 ];
 
 export default function KeyStepsFullPage() {
-  const { isFrozen, frozenProjectId, isItemFrozen, frozenItem } = useFreeze();
+  const { isFrozen, frozenProjectId, isItemFrozen, frozenItem, freezeProject, freezeItem, clearFreezeItem } = useFreeze();
   const [selectedKeystepIds, setSelectedKeystepIds] = useState<string[]>([]);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickTitles, setQuickTitles] = useState<string[]>(Array.from({ length: 5 }).map(() => ""));
@@ -728,6 +729,28 @@ export default function KeyStepsFullPage() {
   const toggleSelectAll = (checked: boolean) => { if (checked) setSelectedKeystepIds(sortedProcessedKeySteps.map((k) => k.id)); else setSelectedKeystepIds([]); };
   const toggleOne = (id: string, checked: boolean) => setSelectedKeystepIds((prev) => checked ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((x) => x !== id));
 
+  const handleFreezeKeyStepRow = (step: KeyStep) => {
+    const project = projects.find((p: any) => String(p.id) === String(step.projectId));
+    const projectName = project?.title || "Untitled Project";
+    const isThisStepFrozen = isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id);
+
+    if (isThisStepFrozen) {
+      clearFreezeItem();
+      toast({
+        title: "Selection Cleared",
+        description: `Back to showing all of "${projectName}".`,
+      });
+      return;
+    }
+
+    freezeProject({ id: project?.id ?? step.projectId, name: projectName });
+    freezeItem({ id: step.id, name: step.title, type: "keystep" });
+    toast({
+      title: "Key Step Frozen",
+      description: `"${step.title}" is now the active focus for ${projectName}.`,
+    });
+  };
+
   // Drag & drop reordering persists a sort_order value on each key step, so
   // it works correctly whether you're viewing "All Projects" or a single
   // project. It's still disabled while filters/employee-grouping are active,
@@ -1258,6 +1281,20 @@ export default function KeyStepsFullPage() {
                           )}
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1">
+                              <Button
+                                variant={isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id) ? "default" : "ghost"}
+                                size="icon"
+                                className={cn(
+                                  "h-8 w-8",
+                                  isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id)
+                                    ? "bg-sky-600 hover:bg-sky-700 text-white"
+                                    : "text-sky-600 hover:text-sky-700 hover:bg-sky-50"
+                                )}
+                                onClick={(e) => { e.stopPropagation(); handleFreezeKeyStepRow(step); }}
+                                title={isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id) ? `Frozen: ${step.title}` : "Freeze this key step"}
+                              >
+                                <Snowflake className="h-4 w-4" />
+                              </Button>
                               <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={(e) => { e.stopPropagation(); openEditPage(step); }} title="Edit"><Edit className="h-4 w-4" /></Button>
                               <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100" onClick={(e) => { e.stopPropagation(); setCloneOpen(true); setCloneKeystep(step); setCloneTitle(`${step.title} (Copy)`); }} title="Clone"><Copy className="h-4 w-4" /></Button>
                               <Button

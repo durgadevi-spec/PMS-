@@ -26,6 +26,7 @@ import {
   disconnectCliq,
   getCliqFrontendBase,
   listCliqChats,
+  listDirectChatEmails,
   listCliqChannels,
   findCliqChatByEmail,
   getCliqMessages,
@@ -8876,6 +8877,21 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Cliq channel threads error:", err);
       res.status(502).json({ error: "Failed to load Cliq threads" });
+    }
+  });
+
+  // Bulk email->chat mapping for the teammate list's per-row unread dot.
+  // Resolves every direct chat's other participant by real Cliq
+  // membership (same source of truth as /chat-for-email above), so a
+  // teammate's Cliq display name not matching their PMS name no longer
+  // hides their unread indicator.
+  app.get("/api/cliq/direct-chat-emails", requireAuth, async (req: any, res) => {
+    try {
+      const entries = await listDirectChatEmails(req.user.id);
+      res.json({ entries });
+    } catch (err) {
+      console.error("Cliq direct chat emails error:", err);
+      res.status(502).json({ error: "Failed to load Cliq direct chats" });
     }
   });
 

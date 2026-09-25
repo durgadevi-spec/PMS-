@@ -80,6 +80,15 @@ export async function getCliqChats(): Promise<{ chats: CliqChat[] }> {
   return res.json();
 }
 
+// Bulk counterpart to getCliqChatForEmail — used to build the teammate
+// list's per-row unread indicator against real Cliq chat membership
+// instead of matching on display names (see ZohoCliqPanel.tsx).
+export async function getCliqDirectChatEmails(): Promise<{ entries: Array<{ chat_id: string; email: string }> }> {
+  const res = await apiFetch("/api/cliq/direct-chat-emails", { bypassCache: true });
+  if (!res.ok) throw new Error("Failed to load Cliq direct chat emails");
+  return res.json();
+}
+
 export async function getCliqChatForEmail(email: string): Promise<{ chat: CliqChat | null }> {
   const res = await apiFetch(`/api/cliq/chat-for-email?email=${encodeURIComponent(email)}`, { bypassCache: true });
   if (!res.ok) throw new Error("Failed to find Cliq conversation");

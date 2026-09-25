@@ -330,6 +330,57 @@ export async function findCliqChatByEmail(userId: string, email: string) {
   return matches[0].chat;
 }
 
+// Bulk counterpart to findCliqChatByEmail: instead of searching for one
+// target email, walk every direct (<=2 participant) chat once and record
+// the other participant's email. This is what the teammate list uses to
+// know which chat belongs to which employee — matching on the connected
+// account's actual Cliq chat membership rather than comparing display
+// names, which are free text on Cliq's side and often drift from the PMS
+// employee record (initials, punctuation, nicknames, word order).
+export async function listDirectChatEmails(userId: string) {
+  const [account] = await db.select().from(cliqAccounts).where(eq(cliqAccounts.userId, userId));
+  const ownEmail = (account?.cliqEmail || "").trim().toLowerCase();
+
+  const result = await listCliqChats(userId) as {
+    chats?: Array<{ chat_id?: string; chat_type?: string; participant_count?: number; name?: string }>
+  } | null;
+
+  const entries: Array<{ chat_id: string; email: string }> = [];
+
+  for (const chat of result?.chats || []) {
+    if (!chat.chat_id) continue;
+    // Same structural signal as isDirectCliqChat on the client — only a
+    // genuine 1:1 can be attributed to a single "other" email.
+    if (Number(chat.participant_count ?? 0) > 2) continue;
+
+    const members = await cliqRequest(userId, `/chats/${encodeURIComponent(chat.chat_id)}/members`) as {
+      members?: Array<any>
+      data?: Array<any>
+    } | null;
+    const memberList = members?.members || members?.data || [];
+
+    for (const member of memberList) {
+      const email = [
+        member.email_id,
+        member.email,
+        member.user_email,
+        member.emailAddress,
+        member.email_address,
+        member.user?.email,
+        member.user?.email_id,
+      ].filter(Boolean).map((value) => String(value).trim().toLowerCase())[0];
+      // Skip the connected account's own membership row — we only want
+      // the *other* participant's email for a 1:1 chat.
+      if (email && (!ownEmail || email !== ownEmail)) {
+        entries.push({ chat_id: chat.chat_id, email });
+        break;
+      }
+    }
+  }
+
+  return entries;
+}
+
 export async function getCliqMessages(userId: string, chatId: string) {
   return cliqRequest(userId, `/chats/${encodeURIComponent(chatId)}/messages?limit=100`);
 }
