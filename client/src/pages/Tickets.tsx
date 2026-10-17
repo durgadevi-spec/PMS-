@@ -65,6 +65,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MultiSelectFilter, ClearFiltersButton } from "@/components/MultiSelectFilter";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -1099,7 +1100,52 @@ function TicketsTable({
   const { user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  // Multi-select filters (empty array = no filter / show all)
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
+  const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
+  const [projectFilter, setProjectFilter] = useState<string[]>([]);
+  const [employeeFilter, setEmployeeFilter] = useState<string[]>([]);
+  const anyFilterActive = [statusFilter, priorityFilter, categoryFilter, departmentFilter, projectFilter, employeeFilter].some(f => f.length > 0);
+  const clearAllFilters = () => {
+    setStatusFilter([]); setPriorityFilter([]); setCategoryFilter([]);
+    setDepartmentFilter([]); setProjectFilter([]); setEmployeeFilter([]);
+  };
+
+  // Helpers so every ticket maps to a project key / employee ids consistently
+  const getProjectKey = (t: TicketData): string | null =>
+    t.projectId ? `p:${t.projectId}` : (t.manualProject ? `m:${t.manualProject}` : null);
+  const getEmployeeIds = (t: TicketData): string[] =>
+    Array.from(new Set([t.assignedTo, t.createdBy, ...(t.participants || [])].filter(Boolean).map(String)));
+
+  // Filter dropdown options are built from the tickets in the current tab
+  const filterOptions = useMemo(() => {
+    const uniq = (vals: (string | undefined | null)[]) =>
+      Array.from(new Set(vals.filter(Boolean) as string[])).sort((a, b) => String(a).localeCompare(String(b))).map(v => ({ value: v, label: v }));
+    const projMap = new Map<string, string>();
+    tickets.forEach(t => {
+      const k = getProjectKey(t);
+      if (k) projMap.set(k, t.projectName || projects.find((p: any) => p.id === t.projectId)?.title || t.manualProject || "Unknown Project");
+    });
+    const empMap = new Map<string, string>();
+    tickets.forEach(t => getEmployeeIds(t).forEach(id => {
+      empMap.set(id, employees.find((e: any) => e.id === id)?.name
+        || (id === t.assignedTo ? t.assignedToName : undefined)
+        || (id === t.createdBy ? t.createdByName : undefined)
+        || id);
+    }));
+    const toOpts = (m: Map<string, string>) =>
+      Array.from(m, ([value, label]) => ({ value, label })).sort((a, b) => String(a.label).localeCompare(String(b.label)));
+    return {
+      status: uniq(tickets.map(t => t.status)),
+      priority: uniq(tickets.map(t => t.priority)),
+      category: uniq(tickets.map(t => t.category)),
+      department: uniq(tickets.map(t => t.department)),
+      project: toOpts(projMap),
+      employee: toOpts(empMap),
+    };
+  }, [tickets, projects, employees]);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -1206,8 +1252,14 @@ function TicketsTable({
         (t.department || "").toLowerCase().includes(searchLower) ||
         (t.assignedToName || "").toLowerCase().includes(searchLower) ||
         (t.createdByName || "").toLowerCase().includes(searchLower);
-      const matchStatus = statusFilter === "all" || t.status === statusFilter;
-      return matchSearch && matchStatus;
+      const matchStatus = statusFilter.length === 0 || statusFilter.includes(t.status);
+      const matchPriority = priorityFilter.length === 0 || priorityFilter.includes(t.priority);
+      const matchCategory = categoryFilter.length === 0 || categoryFilter.includes(t.category);
+      const matchDepartment = departmentFilter.length === 0 || departmentFilter.includes(t.department);
+      const pk = getProjectKey(t);
+      const matchProject = projectFilter.length === 0 || (pk !== null && projectFilter.includes(pk));
+      const matchEmployee = employeeFilter.length === 0 || getEmployeeIds(t).some(id => employeeFilter.includes(id));
+      return matchSearch && matchStatus && matchPriority && matchCategory && matchDepartment && matchProject && matchEmployee;
     });
 
     if (!sortConfig) return result;
@@ -1233,7 +1285,7 @@ function TicketsTable({
       return 0;
     });
     return sorted;
-  }, [tickets, search, statusFilter, sortConfig]);
+  }, [tickets, search, statusFilter, priorityFilter, categoryFilter, departmentFilter, projectFilter, employeeFilter, sortConfig]);
 
   if (isLoading) {
     return (
@@ -1258,20 +1310,15 @@ function TicketsTable({
             onChange={e => setSearch(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[140px] h-9">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="Open">Open</SelectItem>
-              <SelectItem value="In Progress">In Progress</SelectItem>
-              <SelectItem value="Resolved">Resolved</SelectItem>
-              <SelectItem value="Closed">Closed</SelectItem>
-              <SelectItem value="Pending Closure">Pending Closure</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:justify-end">
+          <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+          <MultiSelectFilter label="Status" options={filterOptions.status} selected={statusFilter} onChange={setStatusFilter} />
+          <MultiSelectFilter label="Priority" options={filterOptions.priority} selected={priorityFilter} onChange={setPriorityFilter} />
+          <MultiSelectFilter label="Category" options={filterOptions.category} selected={categoryFilter} onChange={setCategoryFilter} />
+          <MultiSelectFilter label="Department" options={filterOptions.department} selected={departmentFilter} onChange={setDepartmentFilter} />
+          <MultiSelectFilter label="Project" options={filterOptions.project} selected={projectFilter} onChange={setProjectFilter} width="w-72" />
+          <MultiSelectFilter label="Employee" options={filterOptions.employee} selected={employeeFilter} onChange={setEmployeeFilter} />
+          {anyFilterActive && <ClearFiltersButton onClick={clearAllFilters} />}
         </div>
       </div>
       <div className="relative overflow-x-auto">

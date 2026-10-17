@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "@/components/Layout";
 import { apiFetch } from "@/lib/apiClient";
 import {
@@ -40,6 +40,7 @@ import {
 import { formatDate } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { MultiSelectFilter, ClearFiltersButton, FilterOption } from "@/components/MultiSelectFilter";
 
 /* ---------------- TYPES ---------------- */
 
@@ -478,14 +479,113 @@ export default function Completed() {
         setDetailedItemInfo(item.raw);
     };
 
-    const filterItems = (items: CompletedItem[], query: string) => {
+    /* ---------- MULTI-SELECT FILTERS (project / task / employee / department) ---------- */
+
+    type FacetKey = "project" | "task" | "employee" | "department";
+    const FACET_LABELS: Record<FacetKey, string> = {
+        project: "Project",
+        task: "Task",
+        employee: "Employee",
+        department: "Department",
+    };
+    // Which filters make sense for each tab
+    const TAB_FACETS: Record<string, FacetKey[]> = {
+        "c-projects": ["project", "employee", "department"],
+        "c-keysteps": ["project"],
+        "c-tasks": ["project", "task", "employee", "department"],
+        "c-subtasks": ["project", "task", "employee"],
+        "c-tickets": ["project", "employee", "department"],
+        "x-projects": ["project", "employee", "department"],
+        "x-keysteps": ["project"],
+        "x-tasks": ["project", "task", "employee", "department"],
+        "x-subtasks": ["project", "task", "employee"],
+    };
+
+    // selections[tabKey][facet] = string[]
+    const [selections, setSelections] = useState<Record<string, Partial<Record<FacetKey, string[]>>>>({});
+
+    const empName = (id: string) => employees.find((e: any) => e.id === id)?.name || id;
+    const projName = (id: string) => projects.find((p: any) => p.id === id)?.title;
+
+    // Pull the filterable values out of an item's raw record
+    const getFacetValues = (item: CompletedItem, facet: FacetKey): FilterOption[] => {
+        const r = item.raw || {};
+        switch (facet) {
+            case "project": {
+                if (item.type === "Project") return [{ value: r.id, label: r.title }];
+                const id = r.projectId;
+                if (!id) return [];
+                return [{ value: id, label: r.projectTitle || projName(id) || "Unknown Project" }];
+            }
+            case "task": {
+                if (item.type === "Task") return [{ value: r.id, label: r.taskName }];
+                if (item.type === "Subtask" && r.taskId) return [{ value: r.taskId, label: r.taskName || "Unknown Task" }];
+                return [];
+            }
+            case "employee": {
+                let ids: string[] = [];
+                if (item.type === "Project") ids = [r.createdByEmployeeId];
+                else if (item.type === "Task") ids = r.assignedMembers || [];
+                else if (item.type === "Subtask") ids = [r.assignedTo];
+                else if (item.type === "Ticket") ids = [r.assignedTo, r.createdBy, ...(r.participants || [])];
+                return Array.from(new Set(ids.filter(Boolean).map(String))).map(id => ({ value: id, label: empName(id) }));
+            }
+            case "department":
+                return item.department ? [{ value: item.department, label: item.department }] : [];
+        }
+    };
+
+    const filterItems = (items: CompletedItem[], query: string, tabKey?: string) => {
         const q = query.toLowerCase().trim();
-        return items.filter(item =>
-            !q ||
-            item.name.toLowerCase().includes(q) ||
-            item.relatedItem?.toLowerCase().includes(q) ||
-            item.subRelatedItem?.toLowerCase().includes(q)
-        ).sort((a, b) => new Date(b.completionDate).getTime() - new Date(a.completionDate).getTime());
+        const sel = (tabKey && selections[tabKey]) || {};
+        return items.filter(item => {
+            const matchSearch = !q ||
+                item.name.toLowerCase().includes(q) ||
+                item.relatedItem?.toLowerCase().includes(q) ||
+                item.subRelatedItem?.toLowerCase().includes(q);
+            if (!matchSearch) return false;
+            // every facet with a selection must match (OR within a facet, AND across facets)
+            return (Object.keys(sel) as FacetKey[]).every(f => {
+                const chosen = sel[f] || [];
+                if (chosen.length === 0) return true;
+                return getFacetValues(item, f).some(v => v.value != null && chosen.includes(String(v.value)));
+            });
+        }).sort((a, b) => new Date(b.completionDate).getTime() - new Date(a.completionDate).getTime());
+    };
+
+    const renderFilters = (tabKey: string, items: CompletedItem[]) => {
+        const facets = TAB_FACETS[tabKey] || [];
+        const sel = selections[tabKey] || {};
+        const anyActive = facets.some(f => (sel[f] || []).length > 0);
+        return (
+            <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-slate-100 bg-white">
+                <Filter className="h-3.5 w-3.5 text-slate-400" />
+                {facets.map(f => {
+                    const map = new Map<string, string>();
+                    items.forEach(it => getFacetValues(it, f).forEach(o => {
+                        if (o && o.value != null && o.value !== "") {
+                            map.set(String(o.value), String(o.label ?? o.value));
+                        }
+                    }));
+                    const options = Array.from(map, ([value, label]) => ({ value, label }))
+                        .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+                    return (
+                        <MultiSelectFilter
+                            key={f}
+                            label={FACET_LABELS[f]}
+                            options={options}
+                            selected={sel[f] || []}
+                            onChange={(next) =>
+                                setSelections(prev => ({ ...prev, [tabKey]: { ...(prev[tabKey] || {}), [f]: next } }))
+                            }
+                        />
+                    );
+                })}
+                {anyActive && (
+                    <ClearFiltersButton onClick={() => setSelections(prev => ({ ...prev, [tabKey]: {} }))} />
+                )}
+            </div>
+        );
     };
 
     const totalCompleted = completedProjects.length + completedKeySteps.length + completedTasks.length + completedSubtasks.length + closedTickets.length;
@@ -556,7 +656,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <Folder className="h-4 w-4 text-blue-500" />
                                             Completed Projects
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedProjects, projectSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedProjects, projectSearch, "c-projects").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -569,15 +669,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("c-projects", completedProjects)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="blue" label="Loading projects..." />
-                                            ) : filterItems(completedProjects, projectSearch).length === 0 ? (
+                                            ) : filterItems(completedProjects, projectSearch, "c-projects").length === 0 ? (
                                                 <EmptyState icon={<Folder className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={projectSearch ? `No projects match "${projectSearch}"` : "No completed projects found"} />
                                             ) : (
-                                                filterItems(completedProjects, projectSearch).map(item => (
+                                                filterItems(completedProjects, projectSearch, "c-projects").map(item => (
                                                     <CompletedTableRow
                                                         key={item.id}
                                                         item={item}
@@ -600,7 +701,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <Layers className="h-4 w-4 text-amber-500" />
                                             Completed Key Steps
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedKeySteps, keystepSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedKeySteps, keystepSearch, "c-keysteps").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -613,15 +714,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("c-keysteps", completedKeySteps)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="amber" label="Loading key steps..." />
-                                            ) : filterItems(completedKeySteps, keystepSearch).length === 0 ? (
+                                            ) : filterItems(completedKeySteps, keystepSearch, "c-keysteps").length === 0 ? (
                                                 <EmptyState icon={<Layers className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={keystepSearch ? `No key steps match "${keystepSearch}"` : "No completed key steps"} />
                                             ) : (
-                                                filterItems(completedKeySteps, keystepSearch).map(item => (
+                                                filterItems(completedKeySteps, keystepSearch, "c-keysteps").map(item => (
                                                     <CompletedTableRow
                                                         key={item.id}
                                                         item={item}
@@ -644,7 +746,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <CheckSquare className="h-4 w-4 text-indigo-500" />
                                             Completed Tasks
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedTasks, taskSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedTasks, taskSearch, "c-tasks").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -657,15 +759,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("c-tasks", completedTasks)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="indigo" label="Loading tasks..." />
-                                            ) : filterItems(completedTasks, taskSearch).length === 0 ? (
+                                            ) : filterItems(completedTasks, taskSearch, "c-tasks").length === 0 ? (
                                                 <EmptyState icon={<CheckSquare className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={taskSearch ? `No tasks match "${taskSearch}"` : "No completed tasks yet"} />
                                             ) : (
-                                                filterItems(completedTasks, taskSearch).map(item => (
+                                                filterItems(completedTasks, taskSearch, "c-tasks").map(item => (
                                                     <CompletedTableRow
                                                         key={item.id}
                                                         item={item}
@@ -688,7 +791,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <ListChecks className="h-4 w-4 text-emerald-500" />
                                             Completed Subtasks
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedSubtasks, subtaskSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(completedSubtasks, subtaskSearch, "c-subtasks").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -701,15 +804,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("c-subtasks", completedSubtasks)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="emerald" label="Loading subtasks..." />
-                                            ) : filterItems(completedSubtasks, subtaskSearch).length === 0 ? (
+                                            ) : filterItems(completedSubtasks, subtaskSearch, "c-subtasks").length === 0 ? (
                                                 <EmptyState icon={<ListChecks className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={subtaskSearch ? `No subtasks match "${subtaskSearch}"` : "No completed subtasks yet"} />
                                             ) : (
-                                                filterItems(completedSubtasks, subtaskSearch).map(item => (
+                                                filterItems(completedSubtasks, subtaskSearch, "c-subtasks").map(item => (
                                                     <SubtaskCompletedRow
                                                         key={item.id}
                                                         item={item}
@@ -732,7 +836,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <Ticket className="h-4 w-4 text-purple-600" />
                                             Closed Tickets
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(closedTickets, ticketSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(closedTickets, ticketSearch, "c-tickets").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -745,15 +849,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("c-tickets", closedTickets)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="purple" label="Loading closed tickets..." />
-                                            ) : filterItems(closedTickets, ticketSearch).length === 0 ? (
+                                            ) : filterItems(closedTickets, ticketSearch, "c-tickets").length === 0 ? (
                                                 <EmptyState icon={<Ticket className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={ticketSearch ? `No tickets match "${ticketSearch}"` : "No closed tickets found"} />
                                             ) : (
-                                                filterItems(closedTickets, ticketSearch).map(item => (
+                                                filterItems(closedTickets, ticketSearch, "c-tickets").map(item => (
                                                     <CompletedTableRow
                                                         key={item.id}
                                                         item={item}
@@ -796,7 +901,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <Folder className="h-4 w-4 text-red-500" />
                                             Cancelled Projects
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledProjects, cancelledProjectSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledProjects, cancelledProjectSearch, "x-projects").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -809,15 +914,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("x-projects", cancelledProjects)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="red" label="Loading cancelled projects..." />
-                                            ) : filterItems(cancelledProjects, cancelledProjectSearch).length === 0 ? (
+                                            ) : filterItems(cancelledProjects, cancelledProjectSearch, "x-projects").length === 0 ? (
                                                 <EmptyState icon={<Folder className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={cancelledProjectSearch ? `No projects match "${cancelledProjectSearch}"` : "No cancelled projects"} />
                                             ) : (
-                                                filterItems(cancelledProjects, cancelledProjectSearch).map(item => (
+                                                filterItems(cancelledProjects, cancelledProjectSearch, "x-projects").map(item => (
                                                     <CancelledTableRow
                                                         key={item.id}
                                                         item={item}
@@ -840,7 +946,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <Layers className="h-4 w-4 text-red-500" />
                                             Cancelled Key Steps
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledKeySteps, cancelledKeystepSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledKeySteps, cancelledKeystepSearch, "x-keysteps").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -853,15 +959,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("x-keysteps", cancelledKeySteps)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="red" label="Loading cancelled key steps..." />
-                                            ) : filterItems(cancelledKeySteps, cancelledKeystepSearch).length === 0 ? (
+                                            ) : filterItems(cancelledKeySteps, cancelledKeystepSearch, "x-keysteps").length === 0 ? (
                                                 <EmptyState icon={<Layers className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={cancelledKeystepSearch ? `No key steps match "${cancelledKeystepSearch}"` : "No cancelled key steps"} />
                                             ) : (
-                                                filterItems(cancelledKeySteps, cancelledKeystepSearch).map(item => (
+                                                filterItems(cancelledKeySteps, cancelledKeystepSearch, "x-keysteps").map(item => (
                                                     <CancelledTableRow
                                                         key={item.id}
                                                         item={item}
@@ -884,7 +991,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <CheckSquare className="h-4 w-4 text-red-500" />
                                             Cancelled Tasks
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledTasks, cancelledTaskSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledTasks, cancelledTaskSearch, "x-tasks").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -897,15 +1004,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("x-tasks", cancelledTasks)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="red" label="Loading cancelled tasks..." />
-                                            ) : filterItems(cancelledTasks, cancelledTaskSearch).length === 0 ? (
+                                            ) : filterItems(cancelledTasks, cancelledTaskSearch, "x-tasks").length === 0 ? (
                                                 <EmptyState icon={<CheckSquare className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={cancelledTaskSearch ? `No tasks match "${cancelledTaskSearch}"` : "No cancelled tasks"} />
                                             ) : (
-                                                filterItems(cancelledTasks, cancelledTaskSearch).map(item => (
+                                                filterItems(cancelledTasks, cancelledTaskSearch, "x-tasks").map(item => (
                                                     <CancelledTableRow
                                                         key={item.id}
                                                         item={item}
@@ -928,7 +1036,7 @@ export default function Completed() {
                                         <CardTitle className="text-sm font-bold flex items-center gap-2">
                                             <ListChecks className="h-4 w-4 text-red-500" />
                                             Cancelled Subtasks
-                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledSubtasks, cancelledSubtaskSearch).length})</span>
+                                            <span className="text-xs font-normal text-slate-400">({filterItems(cancelledSubtasks, cancelledSubtaskSearch, "x-subtasks").length})</span>
                                         </CardTitle>
                                         <div className="relative w-56">
                                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -941,15 +1049,16 @@ export default function Completed() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <ScrollArea className="h-[calc(100vh-410px)] w-full rounded-md border bg-white">
+                                {renderFilters("x-subtasks", cancelledSubtasks)}
+                                <ScrollArea className="h-[calc(100vh-460px)] w-full rounded-md border bg-white">
                                     <div className="min-w-[1000px]">
                                         <div className="divide-y divide-slate-100">
                                             {isLoading ? (
                                                 <LoadingSpinner color="red" label="Loading cancelled subtasks..." />
-                                            ) : filterItems(cancelledSubtasks, cancelledSubtaskSearch).length === 0 ? (
+                                            ) : filterItems(cancelledSubtasks, cancelledSubtaskSearch, "x-subtasks").length === 0 ? (
                                                 <EmptyState icon={<ListChecks className="h-8 w-8 mx-auto mb-2 opacity-20" />} label={cancelledSubtaskSearch ? `No subtasks match "${cancelledSubtaskSearch}"` : "No cancelled subtasks"} />
                                             ) : (
-                                                filterItems(cancelledSubtasks, cancelledSubtaskSearch).map(item => (
+                                                filterItems(cancelledSubtasks, cancelledSubtaskSearch, "x-subtasks").map(item => (
                                                     <CancelledSubtaskRow
                                                         key={item.id}
                                                         item={item}
@@ -1154,12 +1263,11 @@ function CompletedTableRow({ item, onClick, onReopen }: { item: CompletedItem, o
                         </TooltipContent>
                     </Tooltip>
                     <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className={`text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${
-                            item.type === "Project" ? "text-blue-600 bg-blue-50 border-blue-100" :
-                            item.type === "Key Step" ? "text-amber-600 bg-amber-50 border-amber-100" :
-                            item.type === "Ticket" ? "text-purple-600 bg-purple-50 border-purple-100" :
-                            "text-indigo-600 bg-indigo-50 border-indigo-100"
-                        }`}>{item.type}</span>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${item.type === "Project" ? "text-blue-600 bg-blue-50 border-blue-100" :
+                                item.type === "Key Step" ? "text-amber-600 bg-amber-50 border-amber-100" :
+                                    item.type === "Ticket" ? "text-purple-600 bg-purple-50 border-purple-100" :
+                                        "text-indigo-600 bg-indigo-50 border-indigo-100"
+                            }`}>{item.type}</span>
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <p className="text-[13px] font-bold text-slate-500 truncate cursor-default">{item.relatedItem}</p>
