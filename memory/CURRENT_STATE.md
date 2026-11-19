@@ -5,6 +5,8 @@
 - Sidebar branding and theming: Digital Periwinkle `#5D5FEF` dual-mode sidebar with Knockturn branding.
 
 ## 2. Recently Completed
+- Successfully pushed code to GitHub: `https://github.com/durgadevi-spec/PMS-` (branch: `main`, commit: `e1b62500`).
+- Configured production-grade `.gitignore` protecting secrets (`.env`), build outputs (`dist/`), and dependencies (`node_modules/`).
 - Synchronized blue and white sidebar logo sizes to 100% identical dimensions (`1827 × 477 px`, 3.83 aspect ratio, `h-[40px] max-w-[172px]` in `Layout.tsx`).
 - Blue sidebar uses transparent Cyan Angular K Knockturn logo (`logo-dark-sidebar.png`) with white lettering and zero box/margin distortion.
 - White sidebar uses transparent Cyan Angular K Knockturn logo (`logo-light-sidebar.png`) with dark lettering.
