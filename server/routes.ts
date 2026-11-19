@@ -8,6 +8,7 @@ import { and, sql } from "drizzle-orm";
 import { db, pool } from "./db.ts";
 import { getProjectTimeEntries, getTimestrapTableInfo, getTaskTimeEntries } from "./timestrap-db.ts";
 import { DataValidator } from "../shared/dataValidator.ts";
+import { TASK_INITIAL_SETUP_DURATION_MS, isTaskInInitialSetup } from "../shared/taskInitialSetup.ts";
 import { storage as storageHelper } from "./storage.ts";
 import {
   getGoogleAuthUrl,
@@ -106,6 +107,7 @@ import {
   calendarEvents,
   taskDependencies,
   taskScheduleHistory,
+  taskDateExtensionRequests,
 } from "../shared/schema.ts";
 import * as dependencyService from "./dependencyService.ts";
 
@@ -2109,13 +2111,34 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Validation failed", details: ["Title is required"] });
       }
 
-      const existingProject = await db.select().from(projects).where(or(
-        eq(projects.title, titleTrimmed),
-        eq(projects.projectCode, finalProjectCode)
-      )).limit(1);
+      // Check if project title already exists
+      const [titleMatch] = await db
+        .select({ id: projects.id, title: projects.title })
+        .from(projects)
+        .where(eq(projects.title, titleTrimmed))
+        .limit(1);
 
-      if (existingProject.length > 0) {
-        return res.status(409).json({ error: "Duplicate project", details: "A project with the same title or code already exists." });
+      if (titleMatch) {
+        return res.status(409).json({
+          error: "Duplicate Project Title",
+          details: `A project with the name "${titleTrimmed}" already exists. Please choose a different project name.`,
+          field: "title",
+        });
+      }
+
+      // Check if project code already exists
+      const [codeMatch] = await db
+        .select({ id: projects.id, projectCode: projects.projectCode })
+        .from(projects)
+        .where(eq(projects.projectCode, finalProjectCode))
+        .limit(1);
+
+      if (codeMatch) {
+        return res.status(409).json({
+          error: "Duplicate Project Code",
+          details: `The project code "${finalProjectCode}" already exists. Leave the code empty to auto-generate a unique code.`,
+          field: "projectCode",
+        });
       }
 
       // Format required dates
@@ -2712,6 +2735,7 @@ export async function registerRoutes(
 
         if (originalTasks.length > 0) {
           await tx.insert(projectTasks).values(originalTasks.map(t => ({
+            ...getNewTaskSetupDates(),
             id: taskIdMap.get(t.id)!,
             projectId: newProjectId,
             keyStepId: t.keyStepId ? (keyStepIdMap.get(t.keyStepId) || null) : null,
@@ -3352,13 +3376,30 @@ export async function registerRoutes(
       const wasCompletedOrCancelled =
         !!priorStep && ["completed", "cancelled"].includes(String(priorStep.status).toLowerCase());
 
-      if (typeof data.title !== 'undefined') updateData.title = data.title;
-      if (typeof data.description !== 'undefined') updateData.description = data.description;
-      if (typeof data.requirements !== 'undefined') updateData.requirements = data.requirements;
-      if (typeof data.header !== 'undefined') updateData.header = data.header;
+      if (typeof data.title !== 'undefined') updateData.title = data.title?.trim();
+      if (typeof data.description !== 'undefined') updateData.description = data.description ?? "";
+      if (typeof data.requirements !== 'undefined') updateData.requirements = data.requirements ?? "";
+      if (typeof data.header !== 'undefined') updateData.header = data.header ?? "";
       if (typeof data.phase !== 'undefined') updateData.phase = Number(data.phase);
-      if (typeof data.startDate !== 'undefined') updateData.startDate = data.startDate;
-      if (typeof data.endDate !== 'undefined') updateData.endDate = data.endDate;
+
+      const formatKeystepDate = (d: any) => {
+        if (!d) return undefined;
+        const str = String(d).trim();
+        const dmyMatch = str.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+        if (dmyMatch) {
+          return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, "0")}-${dmyMatch[1].padStart(2, "0")}`;
+        }
+        const dt = new Date(d);
+        if (isNaN(dt.getTime())) return str.slice(0, 10);
+        return dt.toISOString().split("T")[0];
+      };
+
+      if (typeof data.startDate !== 'undefined' && data.startDate) {
+        updateData.startDate = formatKeystepDate(data.startDate);
+      }
+      if (typeof data.endDate !== 'undefined' && data.endDate) {
+        updateData.endDate = formatKeystepDate(data.endDate);
+      }
       if (typeof data.progress !== 'undefined') updateData.progress = Number(data.progress);
 
       if (typeof data.status !== 'undefined') {
@@ -3441,8 +3482,9 @@ export async function registerRoutes(
       if (!updated) return res.status(404).json({ message: "Key step not found" });
       res.json(updated);
     } catch (err) {
-      console.error("Key step patch failed:", err);
-      res.status(500).json({ message: "Update failed" });
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error("Key step patch failed:", errorMessage);
+      res.status(500).json({ message: "Update failed", details: errorMessage });
     }
   });
 
@@ -3779,6 +3821,7 @@ export async function registerRoutes(
       for (const taskTpl of taskList) {
         if (!taskTpl.taskName) continue;
         const [newTask] = await db.insert(projectTasks).values({
+          ...getNewTaskSetupDates(),
           projectId,
           keyStepId: newKs.id,
           taskName: taskTpl.taskName,
@@ -3875,6 +3918,70 @@ export async function registerRoutes(
       TASKS
 ================================ */
 
+  function isOverdueTask(task: { endDate?: string | null; status?: string | null }) {
+    const status = String(task.status || "").toLowerCase();
+    return Boolean(
+      task.endDate &&
+      task.endDate < new Date().toISOString().slice(0, 10) &&
+      status !== "completed" &&
+      status !== "cancelled" &&
+      status !== "canceled"
+    );
+  }
+
+  function getNewTaskSetupDates() {
+    const createdAt = new Date();
+    return {
+      createdAt,
+      initialSetupExpiresAt: new Date(createdAt.getTime() + TASK_INITIAL_SETUP_DURATION_MS),
+    };
+  }
+
+  function requiresTaskDateApproval(
+    task: { initialSetupExpiresAt?: Date | string | null; endDate?: string | null; status?: string | null },
+    now: number = Date.now()
+  ) {
+    if (isTaskInInitialSetup(task.initialSetupExpiresAt, now)) return false;
+    return Boolean(task.initialSetupExpiresAt) || isOverdueTask(task);
+  }
+
+  class DateExtensionRequestError extends Error {}
+
+  async function createTaskDateExtensionRequest(
+    task: typeof projectTasks.$inferSelect,
+    requestedStartDate: string | null,
+    requestedEndDate: string | null,
+    reason: unknown,
+    requestedBy: string | null
+  ) {
+    if (!requestedBy) throw new DateExtensionRequestError("An employee profile is required to request a date extension.");
+    if (typeof reason !== "string" || !reason.trim()) throw new DateExtensionRequestError("A reason is required for task date changes requiring approval.");
+    if (requestedStartDate && requestedEndDate && requestedEndDate < requestedStartDate) {
+      throw new DateExtensionRequestError("The requested end date cannot be before the requested start date.");
+    }
+
+    const [existing] = await db.select({ id: taskDateExtensionRequests.id })
+      .from(taskDateExtensionRequests)
+      .where(and(
+        eq(taskDateExtensionRequests.taskId, task.id),
+        eq(taskDateExtensionRequests.status, "Pending")
+      ))
+      .limit(1);
+    if (existing) throw new DateExtensionRequestError("This task already has a pending date extension request.");
+
+    const [request] = await db.insert(taskDateExtensionRequests).values({
+      taskId: task.id,
+      projectId: task.projectId,
+      requestedBy,
+      originalStartDate: task.startDate,
+      originalEndDate: task.endDate,
+      requestedStartDate,
+      requestedEndDate,
+      reason: reason.trim(),
+    }).returning();
+    return request;
+  }
+
   // CREATE TASK
   app.post("/api/tasks", requireAuth, async (req: any, res) => {
     try {
@@ -3954,6 +4061,31 @@ export async function registerRoutes(
         }
       }
 
+      if (formattedStartDate && formattedEndDate) {
+        const duration = Math.round(
+          (new Date(`${formattedEndDate}T00:00:00Z`).getTime() -
+            new Date(`${formattedStartDate}T00:00:00Z`).getTime()) / 86400000
+        );
+        if (duration < 0 || duration > 7) {
+          return res.status(400).json({
+            error: "Task duration cannot exceed 7 days.",
+            details: [{ field: "endDate", message: "Choose an end date within 7 days of the start date." }],
+          });
+        }
+      }
+
+      if (
+        req.body.durationDays !== undefined &&
+        req.body.durationDays !== null &&
+        req.body.durationDays !== "" &&
+        (!Number.isInteger(Number(req.body.durationDays)) || Number(req.body.durationDays) < 0 || Number(req.body.durationDays) > 7)
+      ) {
+        return res.status(400).json({
+          error: "Task duration cannot exceed 7 days.",
+          details: [{ field: "durationDays", message: "Duration must be between 0 and 7 days." }],
+        });
+      }
+
       debug("✅ Task validation passed, creating task:", { projectId, taskName });
 
       // ----- Duration (Number of Days) on creation -----
@@ -3992,6 +4124,7 @@ export async function registerRoutes(
       const [task] = await db
         .insert(projectTasks)
         .values({
+          ...getNewTaskSetupDates(),
           projectId,
           keyStepId: keyStepId || null,
           taskName,
@@ -4373,6 +4506,31 @@ export async function registerRoutes(
       if (typeof req.body.taskPeriod !== "undefined") updateData.taskPeriod = req.body.taskPeriod;
       if (typeof req.body.reminderFrequency !== "undefined") updateData.reminderFrequency = req.body.reminderFrequency;
 
+      let dateExtensionRequest: typeof taskDateExtensionRequests.$inferSelect | null = null;
+      const requestedStartDate = updateData.startDate ?? oldTask?.startDate ?? null;
+      const requestedEndDate = updateData.endDate ?? oldTask?.endDate ?? null;
+      const datesChanged =
+        requestedStartDate !== (oldTask?.startDate ?? null) ||
+        requestedEndDate !== (oldTask?.endDate ?? null);
+      if (oldTask && datesChanged && requiresTaskDateApproval(oldTask) && !isAdmin) {
+        try {
+          dateExtensionRequest = await createTaskDateExtensionRequest(
+            oldTask,
+            requestedStartDate,
+            requestedEndDate,
+            req.body.scheduleChangeReason || req.body.reason,
+            req.employee?.id || null
+          );
+          delete updateData.startDate;
+          delete updateData.endDate;
+          delete updateData.durationDays;
+        } catch (requestError) {
+          return res.status(requestError instanceof DateExtensionRequestError ? 400 : 500).json({
+            message: requestError instanceof Error ? requestError.message : "Unable to submit date extension request.",
+          });
+        }
+      }
+
       const [updated] = await db
         .update(projectTasks)
         .set(updateData)
@@ -4622,7 +4780,10 @@ export async function registerRoutes(
         console.warn("[PUT /api/tasks/:id] Notification failure:", err);
       }
 
-      res.json(updated);
+      res.json({
+        ...updated,
+        dateChangeApprovalPending: Boolean(dateExtensionRequest),
+      });
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -4641,7 +4802,14 @@ export async function registerRoutes(
       // Snapshot prior schedule so a dependency cascade + history entry can
       // be recorded if this request changes Start/End/Duration.
       const [scheduleSnapshot] = await db
-        .select({ startDate: projectTasks.startDate, endDate: projectTasks.endDate, durationDays: projectTasks.durationDays, projectId: projectTasks.projectId })
+        .select({
+          startDate: projectTasks.startDate,
+          endDate: projectTasks.endDate,
+          durationDays: projectTasks.durationDays,
+          projectId: projectTasks.projectId,
+          status: projectTasks.status,
+          initialSetupExpiresAt: projectTasks.initialSetupExpiresAt,
+        })
         .from(projectTasks)
         .where(eq(projectTasks.id, id))
         .limit(1);
@@ -4766,6 +4934,44 @@ export async function registerRoutes(
               updateData.durationDays = diffDays;
             }
           }
+        }
+      }
+
+      let dateExtensionRequest: typeof taskDateExtensionRequests.$inferSelect | null = null;
+      const requestedStartDate = typeof updateData.startDate !== "undefined"
+        ? updateData.startDate
+        : (scheduleSnapshot?.startDate ?? null);
+      const requestedEndDate = typeof updateData.endDate !== "undefined"
+        ? updateData.endDate
+        : (scheduleSnapshot?.endDate ?? null);
+      const datesChanged =
+        requestedStartDate !== (scheduleSnapshot?.startDate ?? null) ||
+        requestedEndDate !== (scheduleSnapshot?.endDate ?? null);
+      const currentTaskForApproval = scheduleSnapshot
+        ? {
+          endDate: scheduleSnapshot.endDate,
+          status: scheduleSnapshot.status,
+          initialSetupExpiresAt: scheduleSnapshot.initialSetupExpiresAt,
+        }
+        : null;
+      if (scheduleSnapshot && datesChanged && currentTaskForApproval && requiresTaskDateApproval(currentTaskForApproval) && !isAdminReq(req)) {
+        try {
+          const [fullTask] = await db.select().from(projectTasks).where(eq(projectTasks.id, id)).limit(1);
+          if (!fullTask) return res.status(404).json({ message: "Task not found" });
+          dateExtensionRequest = await createTaskDateExtensionRequest(
+            fullTask,
+            requestedStartDate,
+            requestedEndDate,
+            data.scheduleChangeReason || data.reason,
+            req.employee?.id || null
+          );
+          delete updateData.startDate;
+          delete updateData.endDate;
+          delete updateData.durationDays;
+        } catch (requestError) {
+          return res.status(requestError instanceof DateExtensionRequestError ? 400 : 500).json({
+            message: requestError instanceof Error ? requestError.message : "Unable to submit date extension request.",
+          });
         }
       }
 
@@ -4905,7 +5111,13 @@ export async function registerRoutes(
         // (Subtask-driven task date changes already flow through
         // updateParentTimeline('subtask', ...) above; this covers direct
         // edits to a task's own Start/End Date.)
-        if (typeof data.startDate !== 'undefined' || typeof data.endDate !== 'undefined') {
+        const extendsTaskEndDate = Boolean(
+          scheduleSnapshot?.endDate &&
+          updated.endDate &&
+          updated.endDate > scheduleSnapshot.endDate
+        );
+        if (!dateExtensionRequest && !extendsTaskEndDate &&
+          (typeof data.startDate !== 'undefined' || typeof data.endDate !== 'undefined')) {
           updateParentTimeline('task', id).catch((err) => {
             console.error("[PATCH /api/tasks/:id] Background timeline update failed:", err);
           });
@@ -4944,7 +5156,11 @@ export async function registerRoutes(
       if (typeof data.assignedMembers !== 'undefined' || typeof data.taskMembers !== 'undefined') {
         const members = await db.select().from(taskMembers).where(eq(taskMembers.taskId, id));
         const memberIds = members.map(m => m.employeeId);
-        return res.json({ ...updated, assignedMembers: memberIds });
+        return         res.json({
+          ...updated,
+          assignedMembers: memberIds,
+          dateChangeApprovalPending: Boolean(dateExtensionRequest),
+        });
       }
 
       res.json(updated);
@@ -5026,6 +5242,7 @@ export async function registerRoutes(
       // Create new task with cloned data
       const newTaskId = uuidv4();
       await db.insert(projectTasks).values({
+        ...getNewTaskSetupDates(),
         id: newTaskId,
         projectId: originalTask.projectId,
         keyStepId: originalTask.keyStepId,
@@ -5736,6 +5953,15 @@ export async function registerRoutes(
         new Set((Array.isArray(employeeIds) ? employeeIds : []).filter(Boolean).map((v: any) => String(v)))
       );
       const isRemoveMode = mode === "remove";
+      const isAdmin = isAdminReq(req);
+      let pendingRequestCount = 0;
+      const scheduleReason = req.body.scheduleChangeReason || req.body.reason;
+      const bulkScheduleChanges: Array<{
+        taskId: string;
+        projectId: string;
+        before: { startDate: string | null; endDate: string | null; duration: number | null };
+        after: { startDate: string | null; endDate: string | null; duration: number | null };
+      }> = [];
 
       // We'll perform each task's membership update and optional date update.
       // Add mode: append new members to existing ones (don't replace).
@@ -5781,20 +6007,87 @@ export async function registerRoutes(
 
           // Update dates if provided (add mode only — removal is assignee-only)
           if (!isRemoveMode && (startDate || endDate || completionDate)) {
+            const [existingTask] = await tx.select().from(projectTasks).where(eq(projectTasks.id, taskId)).limit(1);
+            if (!existingTask) continue;
             const updateData: any = {};
-            if (startDate) updateData.startDate = startDate;
-            if (endDate) updateData.endDate = endDate;
+            const requestedStartDate = startDate || existingTask.startDate;
+            const requestedEndDate = endDate || existingTask.endDate;
+            const scheduleChanged =
+              requestedStartDate !== existingTask.startDate ||
+              requestedEndDate !== existingTask.endDate;
+            const needsApproval = scheduleChanged && requiresTaskDateApproval(existingTask) && !isAdmin;
+
+            if (needsApproval) {
+              if (requestedStartDate && requestedEndDate && requestedEndDate < requestedStartDate) {
+                throw new DateExtensionRequestError("The requested end date cannot be before the requested start date.");
+              }
+              if (!req.employee?.id || typeof scheduleReason !== "string" || !scheduleReason.trim()) {
+                throw new DateExtensionRequestError("A reason is required to request task date changes requiring approval.");
+              }
+              const [pendingRequest] = await tx.select({ id: taskDateExtensionRequests.id })
+                .from(taskDateExtensionRequests)
+                .where(and(
+                  eq(taskDateExtensionRequests.taskId, existingTask.id),
+                  eq(taskDateExtensionRequests.status, "Pending")
+                ))
+                .limit(1);
+              if (pendingRequest) throw new DateExtensionRequestError(`Task ${existingTask.taskName} already has a pending date extension request.`);
+
+              await tx.insert(taskDateExtensionRequests).values({
+                taskId: existingTask.id,
+                projectId: existingTask.projectId,
+                requestedBy: req.employee.id,
+                originalStartDate: existingTask.startDate,
+                originalEndDate: existingTask.endDate,
+                requestedStartDate,
+                requestedEndDate,
+                reason: scheduleReason.trim(),
+              });
+              pendingRequestCount++;
+            } else {
+              if (startDate) updateData.startDate = startDate;
+              if (endDate) updateData.endDate = endDate;
+              if (scheduleChanged) {
+                bulkScheduleChanges.push({
+                  taskId: existingTask.id,
+                  projectId: existingTask.projectId,
+                  before: {
+                    startDate: existingTask.startDate ?? null,
+                    endDate: existingTask.endDate ?? null,
+                    duration: existingTask.durationDays ?? null,
+                  },
+                  after: {
+                    startDate: requestedStartDate ?? null,
+                    endDate: requestedEndDate ?? null,
+                    duration: existingTask.durationDays ?? null,
+                  },
+                });
+              }
+            }
             if (completionDate) updateData.completionDate = completionDate;
             updateData.updatedAt = new Date();
 
-            await tx
-              .update(projectTasks)
-              .set(updateData)
-              .where(eq(projectTasks.id, taskId));
-            debug(`[BULK-ASSIGN] Task ${taskId} dates updated`);
+            if (Object.keys(updateData).length > 1) {
+              await tx.update(projectTasks).set(updateData).where(eq(projectTasks.id, taskId));
+              debug(`[BULK-ASSIGN] Task ${taskId} dates updated`);
+            }
           }
         }
       });
+
+      for (const change of bulkScheduleChanges) {
+        await dependencyService.recordManualChangeAndCascade(
+          change.taskId,
+          change.projectId,
+          change.before,
+          change.after,
+          {
+            changeType: "System",
+            reason: "Bulk task date update",
+            changedBy: req.employee?.id || null,
+          }
+        );
+      }
 
       // Build appropriate success message
       let message = "";
@@ -5808,10 +6101,14 @@ export async function registerRoutes(
         message = `Updated dates for ${taskIds.length} task(s)`;
       }
 
-      res.json({ success: true, message });
+      if (pendingRequestCount > 0) {
+        message += `; ${pendingRequestCount} task date change request(s) sent for admin approval`;
+      }
+      res.json({ success: true, message, pendingRequestCount });
     } catch (err) {
       console.error("Bulk assign error:", err);
-      res.status(500).json({ error: "Bulk assignment failed" });
+      res.status(err instanceof DateExtensionRequestError ? 400 : 500)
+        .json({ error: err instanceof Error ? err.message : "Bulk assignment failed" });
     }
   });
 
@@ -6494,7 +6791,7 @@ export async function registerRoutes(
       // to opt into the old, heavier behavior.
       const includeSubtasks = String(req.query.includeSubtasks || "") === "true";
 
-      const [members, ccMembers, taskTagsList, subs] = await Promise.all([
+      const [members, ccMembers, taskTagsList, subs, pendingDateRequests] = await Promise.all([
         db
           .select()
           .from(taskMembers)
@@ -6515,7 +6812,14 @@ export async function registerRoutes(
         includeSubtasks
           ? db.select().from(subtasks).where(inArray(subtasks.taskId, taskIds))
           : db.select({ taskId: subtasks.taskId }).from(subtasks).where(inArray(subtasks.taskId, taskIds)),
+        db.select({ taskId: taskDateExtensionRequests.taskId })
+          .from(taskDateExtensionRequests)
+          .where(and(
+            inArray(taskDateExtensionRequests.taskId, taskIds),
+            eq(taskDateExtensionRequests.status, "Pending")
+          )),
       ]);
+      const pendingDateTaskIds = new Set(pendingDateRequests.map((request) => request.taskId));
 
       let subMemMap = new Map<string, string[]>();
       let subTagMap = new Map<string, any[]>();
@@ -6582,6 +6886,7 @@ export async function registerRoutes(
         ccMembers: ccMemberMap.get(task.id) || [],
         tags: tagMap.get(task.id) || [],
         subtaskCount: subtaskCountMap.get(task.id) || 0,
+        pendingDateApproval: pendingDateTaskIds.has(task.id),
         ...(includeSubtasks ? { subtasks: subtaskMap.get(task.id) || [] } : {}),
       }));
 
@@ -6892,6 +7197,16 @@ export async function registerRoutes(
       // Bulk fetch owner names
       const ownerIds = Array.from(new Set(tasks.map((t: any) => t.taskOwnerId).filter(Boolean)));
       const ownerMap = new Map<string, string>();
+      const projectTaskIds = tasks.map((task: any) => task.id);
+      const pendingDateRequests = projectTaskIds.length
+        ? await db.select({ taskId: taskDateExtensionRequests.taskId })
+          .from(taskDateExtensionRequests)
+          .where(and(
+            inArray(taskDateExtensionRequests.taskId, projectTaskIds),
+            eq(taskDateExtensionRequests.status, "Pending")
+          ))
+        : [];
+      const pendingDateTaskIds = new Set(pendingDateRequests.map((request) => request.taskId));
       if (ownerIds.length > 0) {
         const ownerRows = await db.select({ id: employees.id, name: employees.name }).from(employees).where(inArray(employees.id, ownerIds as string[]));
         ownerRows.forEach((o: any) => ownerMap.set(o.id, o.name));
@@ -6904,6 +7219,7 @@ export async function registerRoutes(
           ccMembers: ccMemberProjectMap.get(t.id) || [],
           tags: tagMap.get(t.id) || [],
           subtasks: subtaskMap.get(t.id) || [],
+          pendingDateApproval: pendingDateTaskIds.has(t.id),
           ownerName: t.taskOwnerId ? (ownerMap.get(t.taskOwnerId) || null) : null,
         }));
 
@@ -9724,6 +10040,83 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/task-date-extension-requests", requireAuth, requireAdmin, async (_req: any, res) => {
+    try {
+      const [requests, allTasks, allProjects, allEmployees] = await Promise.all([
+        db.select().from(taskDateExtensionRequests).orderBy(desc(taskDateExtensionRequests.requestedAt)),
+        db.select({ id: projectTasks.id, taskName: projectTasks.taskName }).from(projectTasks),
+        db.select({ id: projects.id, title: projects.title }).from(projects),
+        db.select({ id: employees.id, name: employees.name }).from(employees),
+      ]);
+      const taskNames = new Map(allTasks.map((task) => [task.id, task.taskName]));
+      const projectNames = new Map(allProjects.map((project) => [project.id, project.title]));
+      const employeeNames = new Map(allEmployees.map((employee) => [employee.id, employee.name]));
+      res.json(requests.map((request) => ({
+        ...request,
+        taskName: taskNames.get(request.taskId) || "Deleted task",
+        projectName: projectNames.get(request.projectId) || "Deleted project",
+        employeeName: employeeNames.get(request.requestedBy) || "Unknown employee",
+        reviewerName: request.reviewedBy ? employeeNames.get(request.reviewedBy) || null : null,
+      })));
+    } catch (err) {
+      console.error("Fetch task date extension requests error:", err);
+      res.status(500).json({ error: "Failed to fetch date extension requests" });
+    }
+  });
+
+  app.patch("/api/admin/task-date-extension-requests/:id", requireAuth, requireAdmin, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const action = String(req.body?.action || "").toLowerCase();
+      if (action !== "approve" && action !== "reject") {
+        return res.status(400).json({ error: "Action must be approve or reject." });
+      }
+
+      const [request] = await db.select().from(taskDateExtensionRequests)
+        .where(eq(taskDateExtensionRequests.id, id)).limit(1);
+      if (!request) return res.status(404).json({ error: "Date extension request not found." });
+      if (request.status !== "Pending") return res.status(409).json({ error: "This request has already been reviewed." });
+
+      if (action === "approve") {
+        const [task] = await db.select().from(projectTasks).where(eq(projectTasks.id, request.taskId)).limit(1);
+        if (!task) return res.status(404).json({ error: "The requested task no longer exists." });
+
+        await dependencyService.applyScheduleChange(
+          task.id,
+          {
+            startDate: request.requestedStartDate || undefined,
+            endDate: request.requestedEndDate || undefined,
+          },
+          {
+            changeType: "Manual",
+            reason: request.reason,
+            changedBy: req.employee?.id || null,
+          }
+        );
+      }
+
+      const [updatedRequest] = await db.update(taskDateExtensionRequests)
+        .set({
+          status: action === "approve" ? "Approved" : "Rejected",
+          reviewedBy: req.employee?.id || null,
+          reviewedAt: new Date(),
+        })
+        .where(and(
+          eq(taskDateExtensionRequests.id, id),
+          eq(taskDateExtensionRequests.status, "Pending")
+        ))
+        .returning();
+      if (!updatedRequest) return res.status(409).json({ error: "This request has already been reviewed." });
+      res.json({ success: true, request: updatedRequest });
+    } catch (err) {
+      if (err instanceof dependencyService.DependencyValidationError) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      console.error("Review task date extension request error:", err);
+      res.status(500).json({ error: "Failed to review date extension request." });
+    }
+  });
+
   // Centralized manual schedule change endpoint. Every UI surface that lets a
   // user change Start Date / End Date / Duration (task edit page, Gantt drag,
   // timeline, calendar, bulk reschedule) should call this so the "reason"
@@ -9731,18 +10124,57 @@ export async function registerRoutes(
   app.patch("/api/tasks/:id/schedule", requireAuth, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const { startDate, endDate, durationDays, reason, reasonCategory, changeType } = req.body || {};
+      const { startDate, endDate, durationDays, reason, reasonCategory } = req.body || {};
+      const [task] = await db.select().from(projectTasks).where(eq(projectTasks.id, id)).limit(1);
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      const scheduleChanges = {
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        durationDays: typeof durationDays !== "undefined" ? Number(durationDays) : undefined,
+      };
+      const oldDuration = task.startDate && task.endDate
+        ? dependencyService.durationFromDates(task.startDate, task.endDate)
+        : task.durationDays;
+      let requestedStartDate = scheduleChanges.startDate ?? task.startDate ?? undefined;
+      let requestedEndDate = scheduleChanges.endDate ?? task.endDate ?? undefined;
+      if (scheduleChanges.durationDays && requestedStartDate) {
+        requestedEndDate = dependencyService.endDateFromDuration(requestedStartDate, scheduleChanges.durationDays);
+      } else if (scheduleChanges.startDate && !scheduleChanges.endDate && oldDuration) {
+        requestedEndDate = dependencyService.endDateFromDuration(scheduleChanges.startDate, oldDuration);
+      } else if (scheduleChanges.endDate && !scheduleChanges.startDate && oldDuration) {
+        const requestedStart = new Date(`${scheduleChanges.endDate}T00:00:00.000Z`);
+        requestedStart.setUTCDate(requestedStart.getUTCDate() - (oldDuration - 1));
+        requestedStartDate = requestedStart.toISOString().slice(0, 10);
+      }
+      const datesChanged =
+        (requestedStartDate || null) !== (task.startDate || null) ||
+        (requestedEndDate || null) !== (task.endDate || null);
+      if (datesChanged && requiresTaskDateApproval(task) && !isAdminReq(req)) {
+        try {
+          const request = await createTaskDateExtensionRequest(
+            task,
+            requestedStartDate || null,
+            requestedEndDate || null,
+            reason,
+            req.employee?.id || null
+          );
+          return res.json({ success: true, dateChangeApprovalPending: true, request, task });
+        } catch (requestError) {
+          return res.status(requestError instanceof DateExtensionRequestError ? 400 : 500).json({
+            message: requestError instanceof Error ? requestError.message : "Unable to submit date extension request.",
+          });
+        }
+      }
 
       const result = await dependencyService.applyScheduleChange(
         id,
+        scheduleChanges,
         {
-          startDate: startDate || undefined,
-          endDate: endDate || undefined,
-          durationDays: typeof durationDays !== "undefined" ? Number(durationDays) : undefined,
-        },
-        {
-          changeType: changeType === "System" ? "System" : "Manual",
-          reason: reasonCategory && reasonCategory !== "Other" ? reasonCategory : reason,
+          changeType: "Manual",
+          reason: reasonCategory && reasonCategory !== "Other"
+            ? reasonCategory
+            : reason || (isTaskInInitialSetup(task.initialSetupExpiresAt) ? "Initial Setup period" : undefined),
           changedBy: req.employee?.id || null,
         }
       );

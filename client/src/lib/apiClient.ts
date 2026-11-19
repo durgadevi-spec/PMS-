@@ -172,17 +172,21 @@ export const apiFetch = (url: string, opts?: RequestInit & { bypassCache?: boole
       apiLog(`[API] Response for ${method} ${url}:`, response.status, response.statusText);
 
       // Global handling for unauthorized responses: remove invalid token and redirect
+      // (Do NOT redirect if the request itself was an authentication attempt like login or forgot-password)
       if (response.status === 401) {
-        console.warn(`[API] 401 Unauthorized for ${url} — clearing token and redirecting to /login`);
-        try {
-          localStorage.removeItem("knockturn_token");
-          cache.clear();
-        } catch (e) {
-          /* ignore */
-        }
-        if (typeof window !== "undefined") {
-          // navigate the SPA to the login screen
-          window.location.href = "/login";
+        const isAuthAttempt = url.includes("/api/login") || url.includes("/api/forgot-password");
+        if (!isAuthAttempt) {
+          console.warn(`[API] 401 Unauthorized for ${url} — clearing token and redirecting to /login`);
+          try {
+            localStorage.removeItem("knockturn_token");
+            cache.clear();
+          } catch (e) {
+            /* ignore */
+          }
+          if (typeof window !== "undefined") {
+            // navigate the SPA to the login screen
+            window.location.href = "/login";
+          }
         }
         return response;
       }

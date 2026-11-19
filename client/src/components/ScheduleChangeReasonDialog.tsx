@@ -45,13 +45,14 @@ export function useScheduleChangeReason() {
     const [open, setOpen] = useState(false);
     const [category, setCategory] = useState<string>(SCHEDULE_CHANGE_REASONS[0]);
     const [customText, setCustomText] = useState("");
+    const [requireExplanation, setRequireExplanation] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const resolverRef = useRef<{
         resolve: (v: ScheduleChangeReasonResult) => void;
         reject: () => void;
     } | null>(null);
 
-    const requestReason = useCallback((): Promise<ScheduleChangeReasonResult> => {
+    const requestReason = useCallback((options?: { requireExplanation?: boolean }): Promise<ScheduleChangeReasonResult> => {
         // Guard: if a previous call is still waiting on the user, don't let
         // a second call silently replace resolverRef's resolve/reject pair.
         // That used to orphan the first caller's promise forever (it would
@@ -62,6 +63,7 @@ export function useScheduleChangeReason() {
         }
         setCategory(SCHEDULE_CHANGE_REASONS[0]);
         setCustomText("");
+        setRequireExplanation(Boolean(options?.requireExplanation));
         setError(null);
         setOpen(true);
         return new Promise((resolve, reject) => {
@@ -74,7 +76,7 @@ export function useScheduleChangeReason() {
         const finalReason = isOther ? customText.trim() : category;
         if (!finalReason) {
             setError(
-                isOther
+                requireExplanation || isOther
                     ? "Please enter a reason."
                     : "Please select a reason."
             );
@@ -95,10 +97,13 @@ export function useScheduleChangeReason() {
         <Dialog open={open} onOpenChange={(o) => !o && handleCancel()}>
             <DialogContent className="sm:max-w-md" onInteractOutside={(e) => e.preventDefault()}>
                 <DialogHeader>
-                    <DialogTitle>Why are you changing this schedule?</DialogTitle>
+                    <DialogTitle>
+                        {requireExplanation ? "Why are you requesting Admin approval for this date change?" : "Why are you changing this schedule?"}
+                    </DialogTitle>
                     <DialogDescription>
-                        A reason is required whenever a task's Start Date, End Date, or Duration is
-                        changed manually.
+                        {requireExplanation
+                            ? "Choose a reason for the administrator to review. Select Other to enter a custom reason."
+                            : "A reason is required for date changes outside a task's Initial Setup phase."}
                     </DialogDescription>
                 </DialogHeader>
 

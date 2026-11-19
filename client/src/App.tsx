@@ -22,6 +22,7 @@ const CalendarEnhanced = lazy(() => import("@/pages/CalendarEnhanced"));
 const Extensions = lazy(() => import("@/pages/Extensions"));
 const Tasks = lazy(() => import("@/pages/Tasks"));
 const AdminTasks = lazy(() => import("@/pages/AdminTasks"));
+const TaskDateApprovals = lazy(() => import("@/pages/TaskDateApprovals"));
 const DelayReasons = lazy(() => import("@/pages/DelayReasons"));
 const AddEditTask = lazy(() => import("@/pages/AddEditTask"));
 const KeySteps = lazy(() => import("@/pages/keysteps"));
@@ -151,6 +152,10 @@ function ProtectedRouter() {
 
       <Route path="/admin-tasks">
         <ProtectedAdminRoute component={AdminTasks} />
+      </Route>
+
+      <Route path="/task-date-approvals">
+        <ProtectedAdminRoute component={TaskDateApprovals} />
       </Route>
 
       <Route path="/add-task">

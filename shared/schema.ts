@@ -261,6 +261,7 @@ export const projectTasks = pgTable("project_tasks", {
   parentTaskId: uuid("parent_task_id").references((): AnyPgColumn => projectTasks.id),
 
   createdAt: timestamp("created_at").defaultNow(),
+  initialSetupExpiresAt: timestamp("initial_setup_expires_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at").defaultNow(),
   completedAt: timestamp("completed_at"),
   completionDate: date("completion_date"),
@@ -728,8 +729,30 @@ export const taskScheduleHistory = pgTable("task_schedule_history", {
   index("idx_task_schedule_history_changed_at").on(table.changedAt),
 ]);
 
+export const taskDateExtensionRequests = pgTable("task_date_extension_requests", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  taskId: uuid("task_id").notNull().references(() => projectTasks.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull(),
+  requestedBy: uuid("requested_by").notNull(),
+  originalStartDate: date("original_start_date"),
+  originalEndDate: date("original_end_date"),
+  requestedStartDate: date("requested_start_date"),
+  requestedEndDate: date("requested_end_date"),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("Pending"),
+  requestedAt: timestamp("requested_at").defaultNow().notNull(),
+  reviewedBy: uuid("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+}, (table) => [
+  index("idx_task_date_extension_requests_status").on(table.status),
+  index("idx_task_date_extension_requests_task_id").on(table.taskId),
+  index("idx_task_date_extension_requests_project_id").on(table.projectId),
+  index("idx_task_date_extension_requests_requested_at").on(table.requestedAt),
+]);
+
 export type TaskDependency = typeof taskDependencies.$inferSelect;
 export type TaskScheduleHistory = typeof taskScheduleHistory.$inferSelect;
+export type TaskDateExtensionRequest = typeof taskDateExtensionRequests.$inferSelect;
 
 /* ===============================
    ZOD SCHEMAS

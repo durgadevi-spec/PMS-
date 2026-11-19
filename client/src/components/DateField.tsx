@@ -8,6 +8,8 @@ interface DateFieldProps {
     placeholder?: string;
     /** Earliest selectable date, in yyyy-MM-dd form. */
     min?: string;
+    /** Latest selectable date, in yyyy-MM-dd form. */
+    max?: string;
     className?: string;
     disabled?: boolean;
     clearable?: boolean;
@@ -25,6 +27,7 @@ export default function DateField({
     value,
     onChange,
     min,
+    max,
     className,
     disabled,
 }: DateFieldProps) {
@@ -33,6 +36,7 @@ export default function DateField({
             type="date"
             value={value || ""}
             min={min || undefined}
+            max={max || undefined}
             onChange={(e) => onChange(e.target.value)}
             disabled={disabled}
             className={cn(

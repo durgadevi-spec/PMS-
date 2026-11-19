@@ -66,6 +66,7 @@
     "input-otp": "^1.4.2",
     "jspdf": "^3.0.4",
     "jspdf-autotable": "^5.0.7",
+    "lottie-web": "^5.13.0",
     "lucide-react": "^0.545.0",
     "memorystore": "^1.6.7",
     "multer": "^2.0.2",

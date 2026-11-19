@@ -22,11 +22,33 @@ import {
   FolderOpen,
   GripVertical,
   Snowflake,
+  MoreHorizontal,
+  Calendar as CalendarIcon,
+  Folder,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useLocation } from "wouter";
 import { KeyStepFilters, CustomFilter } from "@/components/KeyStepFilters";
 import { ManageColumns, ColumnConfig } from "@/components/ManageColumns";
 import { Progress } from "@/components/ui/progress";
+import { DeleteConfirmModal } from "@/components/DeleteConfirmModal";
+import { SuccessSendModal } from "@/components/SuccessSendModal";
+import { SuccessCelebrationModal } from "@/components/SuccessCelebrationModal";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +107,33 @@ export default function KeyStepsFullPage() {
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneKeystep, setCloneKeystep] = useState<KeyStep | null>(null);
   const [cloneTitle, setCloneTitle] = useState("");
+  const [density, setDensity] = useState<"compact" | "normal">("compact");
+
+  // ── Slide-Over Drawer for Create / Edit Key Step ──
+  const [stepDrawerOpen, setStepDrawerOpen] = useState(false);
+  const [editingStep, setEditingStep] = useState<KeyStep | null>(null);
+  const [stepDrawerForm, setStepDrawerForm] = useState({
+    title: "",
+    projectId: "",
+    status: "pending" as KeyStep["status"],
+    startDate: isoDateOnly(new Date()),
+    endDate: isoDateOnly(new Date()),
+    description: "",
+  });
+  const [isSavingStep, setIsSavingStep] = useState(false);
+
+  // ── Animated Lottie Delete Confirmation State ──
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [stepToDelete, setStepToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+
+  // ── Animated Lottie Success Send State (Key Step Created) ──
+  const [createdStepSuccessOpen, setCreatedStepSuccessOpen] = useState(false);
+  const [createdStepTitle, setCreatedStepTitle] = useState("");
+
+  // ── Animated Lottie Success Celebration State (Key Step Completed) ──
+  const [celebrationModalOpen, setCelebrationModalOpen] = useState(false);
+  const [celebrationStepTitle, setCelebrationStepTitle] = useState("");
 
   // ── Rich Template System ─────────────────────────────────────────────────
   // Save as Template
@@ -498,10 +547,117 @@ export default function KeyStepsFullPage() {
     setLocation(`/tasks?project_id=${encodeURIComponent(projectId)}&keyStepId=${encodeURIComponent(keyStepId)}&taskId=${encodeURIComponent(taskId)}`);
   };
 
-  const openEditPage = (step: KeyStep) => setLocation(`/add-key-step?projectId=${step.projectId}&keyStepId=${step.id}`);
+  const openCreateStepDrawer = () => {
+    setEditingStep(null);
+    setStepDrawerForm({
+      title: "",
+      projectId: selectedProjectId && selectedProjectId !== "all" ? selectedProjectId : (projects[0]?.id ? String(projects[0].id) : ""),
+      status: "pending",
+      startDate: isoDateOnly(new Date()),
+      endDate: isoDateOnly(new Date()),
+      description: "",
+    });
+    setStepDrawerOpen(true);
+  };
 
-  const handleDeleteStep = async (id: string, title: string) => {
-    if (!window.confirm(`Delete "${title}"?`)) return;
+  const parseDateForInput = (v: any) => {
+    if (!v) return isoDateOnly(new Date());
+    const s = String(v).trim();
+    const m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return s.slice(0, 10);
+  };
+
+  const openEditPage = (step: KeyStep) => {
+    setEditingStep(step);
+    setStepDrawerForm({
+      title: step.title || "",
+      projectId: String(step.projectId),
+      status: step.status || "pending",
+      startDate: parseDateForInput(step.startDate),
+      endDate: parseDateForInput(step.endDate),
+      description: step.description || "",
+    });
+    setStepDrawerOpen(true);
+  };
+
+  const handleSaveStep = async () => {
+    if (!stepDrawerForm.title.trim()) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Step Title is required" });
+      return;
+    }
+    if (!stepDrawerForm.projectId) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Please select a project" });
+      return;
+    }
+
+    setIsSavingStep(true);
+    try {
+      const payload = {
+        title: stepDrawerForm.title.trim(),
+        projectId: stepDrawerForm.projectId,
+        status: stepDrawerForm.status,
+        startDate: parseDateForInput(stepDrawerForm.startDate),
+        endDate: parseDateForInput(stepDrawerForm.endDate),
+        description: stepDrawerForm.description.trim() || "",
+      };
+
+      const isEdit = !!editingStep;
+      const url = isEdit ? `/api/key-steps/${editingStep.id}` : "/api/key-steps";
+      const method = isEdit ? "PATCH" : "POST";
+
+      const res = await apiFetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        let msg = `Save failed (${res.status})`;
+        try {
+          const errObj = await res.json();
+          msg = errObj.details || errObj.message || errObj.error || msg;
+        } catch {
+          const txt = await res.text().catch(() => "");
+          if (txt) msg = txt;
+        }
+        throw new Error(msg);
+      }
+
+      const savedStep = await res.json();
+      if (isEdit) {
+        setKeySteps(prev => prev.map(s => s.id === editingStep.id ? { ...s, ...savedStep } : s));
+        toast({ title: "Updated", description: `"${stepDrawerForm.title}" updated successfully.` });
+        if (stepDrawerForm.status === "completed" && editingStep?.status !== "completed") {
+          setCelebrationStepTitle(stepDrawerForm.title);
+          setCelebrationModalOpen(true);
+        }
+      } else {
+        const titleCreated = stepDrawerForm.title;
+        setKeySteps(prev => [savedStep, ...prev]);
+        setCreatedStepTitle(titleCreated);
+        setCreatedStepSuccessOpen(true);
+      }
+
+      setStepDrawerOpen(false);
+      setEditingStep(null);
+      refreshKeySteps(selectedProjectId);
+    } catch (err: any) {
+      console.error("Save step error:", err);
+      toast({ variant: "destructive", title: "Error", description: err.message || "Failed to save key step" });
+    } finally {
+      setIsSavingStep(false);
+    }
+  };
+
+  const handleDeleteStep = (id: string, title: string) => {
+    setStepToDelete({ id, title });
+    setDeleteConfirmOpen(true);
+  };
+
+  const executeDeleteStep = async () => {
+    if (!stepToDelete) return;
+    const { id, title } = stepToDelete;
     const prev = keySteps;
     setKeySteps((k) => k.filter((s) => s.id !== id));
     setStepTasks((prev) => {
@@ -514,11 +670,13 @@ export default function KeyStepsFullPage() {
       if (!response.ok) { const txt = await response.text().catch(() => ""); throw new Error(txt || `Delete failed (${response.status})`); }
       const result = await response.json();
       if (!result.success) throw new Error("Delete did not succeed on server");
-      toast({ title: "Deleted", description: "Key step deleted successfully" });
-      // Removed 500ms delay and full refresh — the optimistic filter on line 415 is sufficient
+      toast({ title: "Deleted", description: `"${title}" deleted successfully.` });
     } catch (err: any) {
       setKeySteps(prev);
       toast({ variant: "destructive", title: "Error", description: err?.message || "Failed to delete key step" });
+    } finally {
+      setStepToDelete(null);
+      setDeleteConfirmOpen(false);
     }
   };
 
@@ -541,6 +699,10 @@ export default function KeyStepsFullPage() {
       const updated = await res.json();
       setKeySteps((k) => k.map((s) => (s.id === step.id ? { ...s, ...updated } : s)));
       toast({ title: "Status updated" });
+      if (newStatus === "completed") {
+        setCelebrationStepTitle(step.title);
+        setCelebrationModalOpen(true);
+      }
     } catch (err: any) {
       setKeySteps(prevSteps);
       toast({ variant: "destructive", title: "Couldn't update status", description: err?.message });
@@ -572,17 +734,24 @@ export default function KeyStepsFullPage() {
       }));
       setSelectedKeystepIds([]);
       toast({ title: "Status updated", description: `${ids.length} key step${ids.length > 1 ? "s" : ""} updated.` });
+      if (newStatus === "completed") {
+        setCelebrationStepTitle(`${ids.length} Key Step${ids.length > 1 ? "s" : ""}`);
+        setCelebrationModalOpen(true);
+      }
     } catch (err: any) {
       setKeySteps(prev);
       toast({ variant: "destructive", title: "Couldn't update selected key steps", description: err?.message || "Please try again." });
     }
   };
 
-  const bulkDeleteSelected = async () => {
+  const bulkDeleteSelected = () => {
+    if (selectedKeystepIds.length === 0) return;
+    setBulkDeleteConfirmOpen(true);
+  };
+
+  const executeBulkDelete = async () => {
     if (selectedKeystepIds.length === 0) return;
     const ids = [...selectedKeystepIds];
-    if (!window.confirm(`Delete ${ids.length} selected key step${ids.length > 1 ? "s" : ""}?`)) return;
-
     const prev = keySteps;
     setKeySteps((current) => current.filter((step) => !ids.includes(step.id)));
     setSelectedKeystepIds([]);
@@ -596,6 +765,8 @@ export default function KeyStepsFullPage() {
     } catch (err: any) {
       setKeySteps(prev);
       toast({ variant: "destructive", title: "Delete failed", description: err?.message || "Please try again." });
+    } finally {
+      setBulkDeleteConfirmOpen(false);
     }
   };
 
@@ -1027,183 +1198,127 @@ export default function KeyStepsFullPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold">Key Steps</h1>
-          <p className="text-muted-foreground mt-1">Manage project phases and key steps effectively.</p>
-        </div>
+    <div className="h-[calc(100vh-4rem)] flex flex-col p-4 sm:p-6 overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans">
+      <div className="flex-1 min-h-0 flex flex-col max-w-[1600px] w-full mx-auto space-y-3">
+        {/* Top Header Strip */}
+        <div className="flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl sm:text-2xl font-bold font-display text-slate-900 dark:text-slate-100 tracking-tight">
+              Key Steps
+            </h1>
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/60 text-[#7047EB] dark:text-purple-300 border border-purple-200/60">
+              {sortedProcessedKeySteps.length} steps
+            </span>
 
-        {/* Controls */}
-        <div className="flex flex-wrap items-end gap-3 mb-4 bg-white p-4 rounded-lg border">
-          <div className="min-w-[200px]">
-            <p className="text-xs text-muted-foreground mb-1 font-medium">Project</p>
-            <Select value={selectedProjectId || "all"} onValueChange={setSelectedProjectId}>
-              <SelectTrigger className="h-9"><SelectValue placeholder="All Projects" /></SelectTrigger>
-              <SelectContent className="max-h-[300px] overflow-y-auto">
-                <div className="px-2 py-1.5 sticky top-0 bg-white z-10">
-                  <input type="text" placeholder="Search projects..." value={projectSearch} onChange={(e) => setProjectSearch(e.target.value)} onKeyDown={(e) => e.stopPropagation()} className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring" />
-                </div>
-                <SelectItem value="all">All Projects</SelectItem>
-                {projects.filter((p: any) => !projectSearch || (p.title || "").toLowerCase().includes(projectSearch.toLowerCase())).map((p: any) => (
-                  <SelectItem key={p.id} value={String(p.id)}>{p.title}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Inline Project Selector Pill */}
+            <div className="min-w-[160px]">
+              <Select value={selectedProjectId || "all"} onValueChange={setSelectedProjectId}>
+                <SelectTrigger className="h-8 text-xs font-semibold rounded-xl bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-2xs hover:border-slate-300">
+                  <SelectValue placeholder="All Projects" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[300px] overflow-y-auto rounded-xl">
+                  <div className="px-2 py-1.5 sticky top-0 bg-white dark:bg-slate-900 z-10">
+                    <input
+                      type="text"
+                      placeholder="Search projects..."
+                      value={projectSearch}
+                      onChange={(e) => setProjectSearch(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      className="w-full rounded-lg border border-input bg-background px-2.5 py-1 text-xs shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                  <SelectItem value="all">All Projects</SelectItem>
+                  {projects
+                    .filter((p: any) => !projectSearch || (p.title || "").toLowerCase().includes(projectSearch.toLowerCase()))
+                    .map((p: any) => (
+                      <SelectItem key={p.id} value={String(p.id)}>{p.title}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <div className="flex-1" />
-          <Button
-            variant="outline"
-            className="h-9 border-violet-300 text-violet-700 hover:bg-violet-50"
-            onClick={() => { setUseTemplateOpen(true); loadTemplateList(); }}
-            disabled={!selectedProjectId}
-            title="Apply a saved template to this project"
-          >
-            <Library className="mr-1.5 h-4 w-4" /> Use Template
-          </Button>
-          <Button
-            onClick={() => {
-              const target = (selectedProjectId && selectedProjectId !== "all")
-                ? `/add-key-step?projectId=${selectedProjectId}`
-                : "/add-key-step";
-              setLocation(target);
-            }}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-bold h-9"
-          >
-            <Plus className="mr-2 h-4 w-4" /> New Key Step
-          </Button>
-          <Button
-            variant={quickAddOpen ? "secondary" : "outline"}
-            className="h-9"
-            onClick={() => setQuickAddOpen((prev) => !prev)}
-            disabled={!selectedProjectId}
-          >
-            <Plus className="mr-2 h-4 w-4" /> Quick Add
-          </Button>
+
+          {/* Action Buttons */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs font-semibold rounded-xl border-sky-200 dark:border-sky-800/60 bg-sky-50/80 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-900/50 text-sky-700 dark:text-sky-300 shadow-2xs transition-all active:scale-95 disabled:opacity-50"
+              onClick={() => { setUseTemplateOpen(true); loadTemplateList(); }}
+              disabled={!selectedProjectId}
+              title="Apply a saved template to this project"
+            >
+              <Library className="mr-1.5 h-3.5 w-3.5 text-sky-600 dark:text-sky-400" /> Use Template
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                "h-8 text-xs font-semibold rounded-xl transition-all active:scale-95 disabled:opacity-50 shadow-2xs",
+                quickAddOpen
+                  ? "bg-[#EEF0FF] text-[#4E50E6] border-[#DDDFFE] dark:bg-indigo-900/40 dark:text-indigo-200 dark:border-indigo-700"
+                  : "bg-[#F4F4FF] hover:bg-[#ECEEFE] text-[#5D5FEF] border-[#E0E2FE] dark:bg-indigo-950/40 dark:hover:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-800/60"
+              )}
+              onClick={() => setQuickAddOpen((prev) => !prev)}
+              disabled={!selectedProjectId}
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> Quick Add
+            </Button>
+
+            <Button
+              size="sm"
+              onClick={openCreateStepDrawer}
+              className="bg-[#5D5FEF] hover:bg-[#4E50E6] text-white font-semibold h-8 text-xs px-3.5 rounded-xl shadow-xs active:scale-95 transition-all cursor-pointer"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> New Key Step
+            </Button>
+          </div>
         </div>
 
         {quickAddOpen && (
-          <div className="mb-4 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+          <div className="flex-shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2.5">
               <div>
-                <p className="text-sm font-semibold text-slate-900">Quick Add Key Steps</p>
-                <p className="text-xs text-slate-500">Bulk-create titles for the selected project without leaving the page.</p>
+                <p className="text-xs font-bold text-slate-900 dark:text-slate-100">Quick Add Key Steps</p>
+                <p className="text-[11px] text-slate-500">Bulk-create titles for the selected project without leaving the page.</p>
               </div>
-              <Button variant="outline" size="sm" onClick={addQuickTitleRow}>Add row</Button>
+              <Button variant="outline" size="sm" className="h-7 text-xs rounded-lg" onClick={addQuickTitleRow}>Add row</Button>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-2">
               {quickTitles.map((title, idx) => (
                 <div key={idx} className="flex flex-wrap gap-2 items-center">
                   <Input
-                    className="flex-1 min-w-[220px]"
+                    className="flex-1 min-w-[200px] h-8 text-xs rounded-lg"
                     placeholder={`Key Step ${idx + 1}`}
                     value={title}
                     onChange={(e) => updateQuickTitle(idx, e.target.value)}
                   />
-                  <Button variant="ghost" size="sm" onClick={() => removeQuickTitleRow(idx)} disabled={quickTitles.length <= 1}>
+                  <Button variant="ghost" size="sm" className="h-8 text-xs text-slate-400 hover:text-red-500" onClick={() => removeQuickTitleRow(idx)} disabled={quickTitles.length <= 1}>
                     Remove
                   </Button>
                 </div>
               ))}
             </div>
-            <div className="mt-4 flex flex-wrap gap-2 justify-end">
-              <Button variant="outline" size="sm" onClick={() => resetQuickTitles(5)}>Reset</Button>
-              <Button size="sm" onClick={quickAdd} disabled={!selectedProjectId}>
+            <div className="mt-3 flex flex-wrap gap-2 justify-end">
+              <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => resetQuickTitles(5)}>Reset</Button>
+              <Button size="sm" className="h-8 text-xs rounded-lg bg-[#5D5FEF] hover:bg-[#4E50E6] text-white" onClick={quickAdd} disabled={!selectedProjectId}>
                 Create {quickTitles.filter(Boolean).length || "steps"}
               </Button>
             </div>
           </div>
         )}
 
-        {/* Filter Bar */}
-        <div className="flex flex-wrap items-center gap-3 mb-6 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div className="relative flex-1 min-w-[300px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <Input
-              placeholder="Search key steps..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9 bg-slate-50 border-slate-200 focus:bg-white transition-all duration-200 rounded-lg h-10"
-            />
-          </div>
-
-          <KeyStepFilters
-            projectId={selectedProjectId}
-            setProjectId={setSelectedProjectId}
-            projects={projects}
-            statusFilter={statusFilter}
-            setStatusFilter={setStatusFilter}
-            clientFilter={clientFilter}
-            setClientFilter={setClientFilter}
-            clients={clients}
-            priorityFilter={priorityFilter}
-            setPriorityFilter={setPriorityFilter}
-            searchQuery={searchTerm}
-            setSearchQuery={setSearchTerm}
-            startDateFilter={filterStartDate}
-            setStartDateFilter={setFilterStartDate}
-            endDateFilter={filterEndDate}
-            setEndDateFilter={setFilterEndDate}
-            customFilters={customFilters}
-            setCustomFilters={setCustomFilters}
-            onClearAll={onClearAllFilters}
-            onApply={() => refreshKeySteps(selectedProjectId)}
-            savedFilterSets={savedFilterSets}
-            setSavedFilterSets={setSavedFilterSets}
-            employeeFilter={employeeFilter}
-            setEmployeeFilter={setEmployeeFilter}
-            employees={employees}
-          />
-
-          <ManageColumns columns={columnsConfig} setColumns={setColumnsConfig} defaultColumns={defaultKeyStepColumns} />
-
-          <Button
-            onClick={() => setOverdueFilter(prev => prev === "overdue" ? "all" : "overdue")}
-            className={cn(
-              "h-9 px-3 min-w-[100px] justify-center text-xs flex items-center gap-2 shadow-sm transition-all duration-150 hover:shadow-md",
-              overdueFilter === "overdue" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
-            )}
-          >
-            Overdue
-          </Button>
-
-          <Button
-            onClick={() => setStatusFilter(prev => prev === "completed" ? "all" : "completed")}
-            className={cn(
-              "h-9 px-3 min-w-[100px] justify-center text-xs flex items-center gap-2 shadow-sm transition-all duration-150 hover:shadow-md",
-              statusFilter === "completed" ? "bg-green-600 hover:bg-green-700 text-white" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
-            )}
-          >
-            Completed
-          </Button>
-
-          {hasActiveFilters && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClearAllFilters}
-              className="text-slate-500 hover:text-red-600 hover:bg-red-50 h-10 px-3"
-            >
-              Clear all
-            </Button>
-          )}
-        </div>
-
-        {hasActiveFilters && <p className="text-sm text-muted-foreground mb-2">Showing {sortedProcessedKeySteps.length} of {sortedKeySteps.length} key steps</p>}
-        {!canReorder && sortedProcessedKeySteps.length > 1 && (
-          <p className="text-xs text-muted-foreground mb-2 italic">Clear filters to enable drag-to-reorder for key steps.</p>
-        )}
-
         {selectedKeystepIds.length > 0 && (
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-            <div className="text-sm font-medium text-amber-900">
+          <div className="flex-shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-950/30 px-3 py-2">
+            <div className="text-xs font-semibold text-amber-900 dark:text-amber-200">
               {selectedKeystepIds.length} selected
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <select
                 value={bulkStatusValue}
                 onChange={(e) => setBulkStatusValue(e.target.value as KeyStep["status"])}
-                className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-amber-500"
+                className="h-7 rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-700 outline-none focus:ring-1 focus:ring-amber-500"
               >
                 <option value="pending">Pending</option>
                 <option value="not started">Not Started</option>
@@ -1211,55 +1326,176 @@ export default function KeyStepsFullPage() {
                 <option value="completed">Completed</option>
                 <option value="cancelled">Cancelled</option>
               </select>
-              <Button size="sm" variant="outline" onClick={() => bulkUpdateSelectedStatus(bulkStatusValue)}>Apply Status</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs rounded-lg" onClick={() => bulkUpdateSelectedStatus(bulkStatusValue)}>Apply Status</Button>
 
-              <div className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-1.5 py-1">
+              <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-1.5 py-0.5">
                 <span className="text-[10px] text-slate-500">Start</span>
-                <input type="date" value={bulkStartDate} onChange={(e) => setBulkStartDate(e.target.value)} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs" />
+                <input type="date" value={bulkStartDate} onChange={(e) => setBulkStartDate(e.target.value)} className="h-6 rounded border border-slate-200 bg-white px-1.5 text-xs" />
               </div>
-              <div className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-1.5 py-1">
+              <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-1.5 py-0.5">
                 <span className="text-[10px] text-slate-500">End</span>
-                <input type="date" value={bulkEndDate} onChange={(e) => setBulkEndDate(e.target.value)} className="h-7 rounded border border-slate-200 bg-white px-2 text-xs" />
+                <input type="date" value={bulkEndDate} onChange={(e) => setBulkEndDate(e.target.value)} className="h-6 rounded border border-slate-200 bg-white px-1.5 text-xs" />
               </div>
-              <Button size="sm" variant="outline" onClick={bulkUpdateSelectedDates}>Apply Dates</Button>
-              <Button size="sm" variant="destructive" onClick={bulkDeleteSelected}>Delete</Button>
-              <Button size="sm" variant="ghost" onClick={() => setSelectedKeystepIds([])}>Clear</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs rounded-lg" onClick={bulkUpdateSelectedDates}>Apply Dates</Button>
+              <Button size="sm" variant="destructive" className="h-7 text-xs rounded-lg" onClick={bulkDeleteSelected}>Delete</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs rounded-lg" onClick={() => setSelectedKeystepIds([])}>Clear</Button>
             </div>
           </div>
         )}
 
         {/* Clone Modal */}
         {cloneOpen && cloneKeystep && (
-          <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/30">
-            <div className="bg-white rounded-lg p-6 w-96 shadow-lg">
-              <h2 className="text-lg font-bold mb-4">Clone Keystep</h2>
-              <input className="w-full border rounded p-2 mb-4" placeholder="New keystep title" value={cloneTitle} onChange={(e) => setCloneTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doClone(); }} />
+          <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/30 backdrop-blur-xs">
+            <div className="bg-white dark:bg-slate-900 rounded-xl p-6 w-96 shadow-lg border border-slate-200">
+              <h2 className="text-base font-bold mb-3">Clone Keystep</h2>
+              <input className="w-full border rounded-lg p-2 mb-4 text-xs" placeholder="New keystep title" value={cloneTitle} onChange={(e) => setCloneTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doClone(); }} />
               <div className="flex gap-2 justify-end">
                 <Button variant="outline" size="sm" onClick={() => setCloneOpen(false)}>Cancel</Button>
-                <Button variant="default" size="sm" onClick={doClone}>Clone</Button>
+                <Button variant="default" size="sm" className="bg-[#5D5FEF] hover:bg-[#4E50E6] text-white" onClick={doClone}>Clone</Button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Table */}
-        <div key={selectedProjectId} className="overflow-x-auto bg-white rounded-lg border shadow-sm">
-          {sortedProcessedKeySteps.length > 0 ? (
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-1 py-3 w-6" title={canReorder ? "Drag to reorder" : "Clear filters to reorder"} />
-                  <th className="px-2 py-3 w-8" />
-                  <th className="px-3 py-3 w-8"><input type="checkbox" checked={allSelected} onChange={(e) => toggleSelectAll(e.target.checked)} className="rounded" /></th>
-                  {isColVisible("title") && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Title</th>}
-                  {isColVisible("project") && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Project</th>}
-                  {isColVisible("startDate") && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Start Date</th>}
-                  {isColVisible("endDate") && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>End Date</th>}
-                  {isColVisible("progress") && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Progress</th>}
-                  {isColVisible("status") && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Status</th>}
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Actions</th>
-                </tr>
-              </thead>
+        {/* Static Card Container with Internal Scrolling */}
+        <div className="flex-1 min-h-0 flex flex-col bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs overflow-hidden">
+          {/* Integrated Toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:px-4 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex-shrink-0">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Right-Expanding Search Bar */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+                <Input
+                  placeholder="Search key steps..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-8 pr-7 bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 focus:bg-white dark:focus:bg-slate-900 focus:w-80 w-52 sm:w-60 transition-all duration-300 ease-out rounded-xl h-8 text-xs"
+                />
+                {searchTerm && (
+                  <button
+                    onClick={() => setSearchTerm("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+
+              <KeyStepFilters
+                projectId={selectedProjectId}
+                setProjectId={setSelectedProjectId}
+                projects={projects}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+                clientFilter={clientFilter}
+                setClientFilter={setClientFilter}
+                clients={clients}
+                priorityFilter={priorityFilter}
+                setPriorityFilter={setPriorityFilter}
+                searchQuery={searchTerm}
+                setSearchQuery={setSearchTerm}
+                startDateFilter={filterStartDate}
+                setStartDateFilter={setFilterStartDate}
+                endDateFilter={filterEndDate}
+                setEndDateFilter={setFilterEndDate}
+                customFilters={customFilters}
+                setCustomFilters={setCustomFilters}
+                onClearAll={onClearAllFilters}
+                onApply={() => refreshKeySteps(selectedProjectId)}
+                savedFilterSets={savedFilterSets}
+                setSavedFilterSets={setSavedFilterSets}
+                employeeFilter={employeeFilter}
+                setEmployeeFilter={setEmployeeFilter}
+                employees={employees}
+              />
+
+              <ManageColumns columns={columnsConfig} setColumns={setColumnsConfig} defaultColumns={defaultKeyStepColumns} />
+
+              <button
+                type="button"
+                onClick={() => setOverdueFilter(prev => prev === "overdue" ? "all" : "overdue")}
+                className={cn(
+                  "h-8 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all duration-150 border cursor-pointer",
+                  overdueFilter === "overdue"
+                    ? "bg-rose-500 border-rose-600 text-white shadow-2xs"
+                    : "bg-rose-50/70 border-rose-200/80 text-rose-700 hover:bg-rose-100"
+                )}
+              >
+                Overdue
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStatusFilter(prev => prev === "completed" ? "all" : "completed")}
+                className={cn(
+                  "h-8 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all duration-150 border cursor-pointer",
+                  statusFilter === "completed"
+                    ? "bg-emerald-500 border-emerald-600 text-white shadow-2xs"
+                    : "bg-emerald-50/70 border-emerald-200/80 text-emerald-700 hover:bg-emerald-100"
+                )}
+              >
+                Completed
+              </button>
+
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onClearAllFilters}
+                  className="text-slate-500 hover:text-red-600 hover:bg-red-50 h-8 px-2.5 text-xs rounded-xl"
+                >
+                  Clear all
+                </Button>
+              )}
+            </div>
+
+            {/* Density Toggle */}
+            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200/80 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setDensity("compact")}
+                className={cn(
+                  "px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer",
+                  density === "compact"
+                    ? "bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 shadow-2xs"
+                    : "text-slate-500 hover:text-slate-700"
+                )}
+              >
+                Compact
+              </button>
+              <button
+                type="button"
+                onClick={() => setDensity("normal")}
+                className={cn(
+                  "px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer",
+                  density === "normal"
+                    ? "bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 shadow-2xs"
+                    : "text-slate-500 hover:text-slate-700"
+                )}
+              >
+                Normal
+              </button>
+            </div>
+          </div>
+
+          {/* Inner Scroll Container with Lavender Sticky Column Header */}
+          <div key={selectedProjectId} className="flex-1 overflow-y-auto overflow-x-auto relative">
+            {sortedProcessedKeySteps.length > 0 ? (
+              <table className="min-w-full divide-y divide-slate-100 dark:divide-slate-800">
+                <thead className="sticky top-0 z-10 bg-[#F2F3FF] dark:bg-purple-950/50 border-b border-[#E0D8FE] dark:border-purple-800/50 shadow-2xs">
+                  <tr>
+                    <th className="px-1 py-2.5 w-6 text-center" title={canReorder ? "Drag to reorder" : "Clear filters to reorder"} />
+                    <th className="px-2 py-2.5 w-8" />
+                    <th className="px-3 py-2.5 w-8"><input type="checkbox" checked={allSelected} onChange={(e) => toggleSelectAll(e.target.checked)} className="rounded border-slate-300 text-[#7047EB] focus:ring-[#7047EB]" /></th>
+                    {isColVisible("title") && <th className="px-4 py-2.5 text-left text-[11px] font-bold text-[#584B85] dark:text-purple-300 uppercase tracking-wider whitespace-nowrap">Title</th>}
+                    {isColVisible("project") && <th className="px-4 py-2.5 text-left text-[11px] font-bold text-[#584B85] dark:text-purple-300 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Project</th>}
+                    {isColVisible("startDate") && <th className="px-4 py-2.5 text-left text-[11px] font-bold text-[#584B85] dark:text-purple-300 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Start Date</th>}
+                    {isColVisible("endDate") && <th className="px-4 py-2.5 text-left text-[11px] font-bold text-[#584B85] dark:text-purple-300 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>End Date</th>}
+                    {isColVisible("progress") && <th className="px-4 py-2.5 text-left text-[11px] font-bold text-[#584B85] dark:text-purple-300 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Progress</th>}
+                    {isColVisible("status") && <th className="px-4 py-2.5 text-left text-[11px] font-bold text-[#584B85] dark:text-purple-300 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Status</th>}
+                    <th className="px-4 py-2.5 text-right text-[11px] font-bold text-[#584B85] dark:text-purple-300 uppercase tracking-wider whitespace-nowrap" style={{ width: "1%" }}>Actions</th>
+                  </tr>
+                </thead>
 
               <tbody className="divide-y divide-gray-100">
                 {(() => {
@@ -1308,12 +1544,17 @@ export default function KeyStepsFullPage() {
                         {groupHeaderRow}
                         {/* KEY STEP ROW */}
                         <tr
-                          className={`hover:bg-slate-50 transition-colors ${draggedStepId === step.id ? "opacity-40" : ""} ${dragOverStepId === step.id && draggedStepId && draggedStepId !== step.id ? "border-t-2 border-primary" : ""}`}
+                          className={cn(
+                            "hover:bg-[#F2F3FF]/80 dark:hover:bg-purple-950/30 transition-colors duration-150 group",
+                            selectedKeystepIds.includes(step.id) && "bg-[#F2F3FF]/50",
+                            draggedStepId === step.id ? "opacity-40" : "",
+                            dragOverStepId === step.id && draggedStepId && draggedStepId !== step.id ? "border-t-2 border-[#7047EB]" : ""
+                          )}
                           onDragOver={(e) => handleStepDragOver(e, step.id)}
                           onDrop={(e) => handleStepDrop(e, step.id)}
                           onDragEnd={handleStepDragEnd}
                         >
-                          <td className="px-1 py-3 w-6">
+                          <td className={cn("px-1 w-6", density === "compact" ? "py-1.5" : "py-2.5")}>
                             {canReorder && (
                               <div
                                 draggable
@@ -1326,22 +1567,18 @@ export default function KeyStepsFullPage() {
                               </div>
                             )}
                           </td>
-                          <td className="px-2 py-3 w-8">
+                          <td className={cn("px-2 w-8", density === "compact" ? "py-1.5" : "py-2.5")}>
                             <button onClick={() => toggleExpand(step)} className="rounded p-0.5 hover:bg-slate-200 transition-colors text-slate-500" title={isExpanded ? "Hide details" : "Show details"}>
                               {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                             </button>
                           </td>
-                          <td className="px-3 py-3 w-8"><input type="checkbox" className="rounded" checked={selectedKeystepIds.includes(step.id)} onChange={(e) => toggleOne(step.id, e.target.checked)} onClick={(e) => e.stopPropagation()} /></td>
+                          <td className={cn("px-3 w-8", density === "compact" ? "py-1.5" : "py-2.5")}>
+                            <input type="checkbox" className="rounded border-slate-300 text-[#7047EB] focus:ring-[#7047EB]" checked={selectedKeystepIds.includes(step.id)} onChange={(e) => toggleOne(step.id, e.target.checked)} onClick={(e) => e.stopPropagation()} />
+                          </td>
                           {isColVisible("title") && (
                             <td
-                              className="px-4 py-3 font-medium cursor-pointer"
+                              className={cn("px-4 font-medium cursor-pointer", density === "compact" ? "py-1.5" : "py-2.5")}
                               onClick={() => {
-                                // NOTE: Tasks.tsx reads its project/key-step filter from the
-                                // "tasks_projectId" / "tasks_keyStepId" localStorage keys (or
-                                // the project_id/keyStepId URL params) — NOT "selectedProjectId"
-                                // / "selectedKeyStepId". Setting the wrong keys here meant a
-                                // click always landed on the Tasks page with no filter applied,
-                                // showing every task instead of just this key step's tasks.
                                 localStorage.setItem("tasks_projectId", String(step.projectId));
                                 localStorage.setItem("selectedProjectId", String(step.projectId));
                                 localStorage.setItem("tasks_keyStepId", String(step.id));
@@ -1365,7 +1602,7 @@ export default function KeyStepsFullPage() {
                                   )}
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <span className="hover:text-primary hover:underline underline-offset-2 transition-colors whitespace-nowrap truncate max-w-[300px] cursor-default">
+                                      <span className="hover:text-primary hover:underline underline-offset-2 transition-colors whitespace-nowrap truncate max-w-[300px] cursor-default text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200">
                                         {step.title}
                                       </span>
                                     </TooltipTrigger>
@@ -1378,66 +1615,88 @@ export default function KeyStepsFullPage() {
                             </td>
                           )}
                           {isColVisible("project") && (
-                            <td className="px-4 py-3 text-sm">
-                              <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 font-medium text-[11px] whitespace-nowrap">
+                            <td className={cn("px-4 text-xs", density === "compact" ? "py-1.5" : "py-2.5")}>
+                              <span className="px-2 py-0.5 rounded-md bg-purple-50 text-[#7047EB] font-medium text-[11px] whitespace-nowrap border border-purple-200/50">
                                 {projects.find(p => String(p.id) === String(step.projectId))?.title || "Unknown Project"}
                               </span>
                             </td>
                           )}
-                          {isColVisible("startDate") && <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{fmtDate(step.startDate)}</td>}
-                          {isColVisible("endDate") && <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{fmtDate(step.endDate)}</td>}
+                          {isColVisible("startDate") && <td className={cn("px-4 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap", density === "compact" ? "py-1.5" : "py-2.5")}>{fmtDate(step.startDate)}</td>}
+                          {isColVisible("endDate") && <td className={cn("px-4 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap", density === "compact" ? "py-1.5" : "py-2.5")}>{fmtDate(step.endDate)}</td>}
                           {isColVisible("progress") && (
-                            <td className="px-4 py-3 min-w-[120px]">
-                              <div className="flex flex-col gap-1">
-                                <div className="flex justify-between items-center text-[10px] text-muted-foreground font-medium">
-                                  <span>{step.progress || 0}%</span>
-                                </div>
-                                <Progress value={step.progress || 0} className="h-1.5" />
+                            <td className={cn("px-4 min-w-[110px]", density === "compact" ? "py-1.5" : "py-2.5")}>
+                              <div className="flex items-center gap-2">
+                                <Progress value={step.progress || 0} className="h-1.5 flex-1" />
+                                <span className="text-[10px] text-slate-500 font-mono min-w-[28px] text-right">{step.progress || 0}%</span>
                               </div>
                             </td>
                           )}
                           {isColVisible("status") && (
-                            <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                            <td className={cn("px-4", density === "compact" ? "py-1.5" : "py-2.5")} onClick={(e) => e.stopPropagation()}>
                               <Select value={step.status} onValueChange={(v) => updateStepStatus(step, v as KeyStep["status"])}>
-                                <SelectTrigger className={`h-8 w-32 text-xs font-medium capitalize ${getStatusBadgeClass(step.status)}`}>
+                                <SelectTrigger className={`h-7 w-28 text-[11px] font-semibold capitalize rounded-lg ${getStatusBadgeClass(step.status)}`}>
                                   <SelectValue>
                                     {step.status ? String(step.status).replace("-", " ") : "Select status"}
                                   </SelectValue>
                                 </SelectTrigger>
-                                <SelectContent>
+                                <SelectContent className="rounded-xl">
                                   {KEYSTEP_STATUS_OPTIONS.map((s) => (
-                                    <SelectItem key={s} value={s} className="capitalize">{s.replace("-", " ")}</SelectItem>
+                                    <SelectItem key={s} value={s} className="capitalize text-xs">{s.replace("-", " ")}</SelectItem>
                                   ))}
                                 </SelectContent>
                               </Select>
                             </td>
                           )}
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-1">
-                              <Button
-                                variant={isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id) ? "default" : "ghost"}
-                                size="icon"
-                                className={cn(
-                                  "h-8 w-8",
-                                  isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id)
-                                    ? "bg-sky-600 hover:bg-sky-700 text-white"
-                                    : "text-sky-600 hover:text-sky-700 hover:bg-sky-50"
-                                )}
-                                onClick={(e) => { e.stopPropagation(); handleFreezeKeyStepRow(step); }}
-                                title={isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id) ? `Frozen: ${step.title}` : "Freeze this key step"}
-                              >
-                                <Snowflake className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={(e) => { e.stopPropagation(); openEditPage(step); }} title="Edit"><Edit className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-slate-100" onClick={(e) => { e.stopPropagation(); setCloneOpen(true); setCloneKeystep(step); setCloneTitle(`${step.title} (Copy)`); }} title="Clone"><Copy className="h-4 w-4" /></Button>
-                              <Button
-                                variant="ghost" size="icon"
-                                className="h-8 w-8 text-violet-600 hover:text-violet-700 hover:bg-violet-50"
-                                title="Save as Template (includes tasks & subtasks)"
-                                onClick={(e) => { e.stopPropagation(); setSaveTemplateStep(step); setSaveTemplateName(step.title); }}
-                              ><Bookmark className="h-4 w-4" /></Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleDeleteStep(step.id, step.title); }} title="Delete"><Trash2 className="h-4 w-4" /></Button>
-                            </div>
+                          <td className={cn("px-4 text-right", density === "compact" ? "py-1.5" : "py-2.5")}>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-slate-500 hover:text-slate-800 hover:bg-white/90 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-52 rounded-xl shadow-lg border-slate-200 dark:border-slate-800">
+                                <DropdownMenuItem onClick={() => openEditPage(step)} className="gap-2 text-xs cursor-pointer">
+                                  <Edit className="h-3.5 w-3.5 text-blue-600" /> Edit Key Step
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFreezeKeyStepRow(step)} className="gap-2 text-xs cursor-pointer">
+                                  <Snowflake className="h-3.5 w-3.5 text-sky-600" />
+                                  {isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id)
+                                    ? "Clear Focus Freeze"
+                                    : "Freeze Focus"}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setCloneOpen(true);
+                                    setCloneKeystep(step);
+                                    setCloneTitle(`${step.title} (Copy)`);
+                                  }}
+                                  className="gap-2 text-xs cursor-pointer"
+                                >
+                                  <Copy className="h-3.5 w-3.5 text-slate-600" /> Clone / Duplicate
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setSaveTemplateStep(step);
+                                    setSaveTemplateName(step.title);
+                                  }}
+                                  className="gap-2 text-xs cursor-pointer"
+                                >
+                                  <Bookmark className="h-3.5 w-3.5 text-violet-600" /> Save as Template
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => handleDeleteStep(step.id, step.title)}
+                                  className="gap-2 text-xs text-rose-600 focus:text-rose-600 focus:bg-rose-50 cursor-pointer"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" /> Delete Key Step
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </td>
                         </tr>
 
@@ -1637,6 +1896,7 @@ export default function KeyStepsFullPage() {
           )}
         </div>
       </div>
+    </div>
 
       {/* ── SAVE AS TEMPLATE MODAL ─────────────────────────────────────── */}
       {saveTemplateStep && (
@@ -1814,6 +2074,409 @@ export default function KeyStepsFullPage() {
           </div>
         </div>
       )}
+
+      {/* ── CREATE / EDIT KEY STEP SLIDE-OVER DRAWER ─────────────────────── */}
+      <Sheet open={stepDrawerOpen} onOpenChange={setStepDrawerOpen}>
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-[480px] p-0 flex flex-col h-full bg-[#F5F1FF] dark:bg-slate-900 border-l border-[#E6E0F5] dark:border-slate-800 shadow-[0_0_40px_rgba(118,82,232,0.10)] overflow-hidden font-sans"
+        >
+          {/* ── HEADER – pure white, no pattern ── */}
+          <div className="flex items-center justify-between px-6 py-5 border-b border-[#EAE5FF] dark:border-slate-800 bg-white dark:bg-slate-900 flex-shrink-0 z-10 relative">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-[#F0EBFF] dark:bg-purple-950/60 border border-[#DDD5FA] dark:border-purple-800/40 flex items-center justify-center text-[#7652E8] shadow-sm flex-shrink-0">
+                <Plus className="h-5 w-5 stroke-[2.5]" />
+              </div>
+              <div>
+                <SheetTitle className="text-[15px] font-bold text-[#172033] dark:text-slate-100 tracking-tight leading-snug">
+                  {editingStep ? "Edit Key Step" : "Create New Key Step"}
+                </SheetTitle>
+                <SheetDescription className="text-[11px] text-[#71809A] dark:text-slate-400 mt-0.5 leading-normal">
+                  {editingStep ? "Update the details and schedule for this phase." : "Add a new key step and define its phase details."}
+                </SheetDescription>
+              </div>
+            </div>
+          </div>
+
+          {/* ── CONTENT AREA: lavender bg fills flex-1, SVG fixed behind, scroll inside ── */}
+          <div className="relative flex-1 overflow-hidden">
+            {/* Pattern SVG – absolutely covers the entire content zone from header to footer, never scrolls */}
+            <svg
+              aria-hidden="true"
+              className="pointer-events-none select-none absolute inset-0 w-full h-full z-0"
+              viewBox="0 0 480 800"
+              preserveAspectRatio="xMidYMid slice"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <g fill="none" stroke="#C4B8F0" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" opacity="0.50">
+                {/* ── ROW 1 – near top (y ~ 15-30) ── */}
+                {/* Clipboard – top-left */}
+                <rect x="22" y="14" width="15" height="19" rx="2.5" />
+                <line x1="26" y1="20" x2="33" y2="20" />
+                <line x1="26" y1="24" x2="33" y2="24" />
+                <line x1="26" y1="28" x2="30" y2="28" />
+                {/* Clock – top-center */}
+                <circle cx="200" cy="22" r="9" />
+                <line x1="200" y1="16" x2="200" y2="22" />
+                <line x1="200" y1="22" x2="205" y2="25" />
+                {/* Rocket – top-right */}
+                <g transform="translate(400,18) rotate(38)">
+                  <path d="M0-9 C3-6 4-1 4 4L-4 4C-4-1-3-6 0-9Z" />
+                  <circle cx="0" cy="0" r="1.5" />
+                  <path d="M-4 1L-7 5L-4 5.5Z" />
+                  <path d="M4 1L7 5L4 5.5Z" />
+                </g>
+
+                {/* ── ROW 2 (y ~ 95-115) ── */}
+                {/* People/team – left */}
+                <circle cx="62" cy="95" r="5" />
+                <circle cx="74" cy="95" r="5" />
+                <path d="M52 110 C52 103 84 103 84 110" />
+                {/* Gear – right */}
+                <circle cx="392" cy="100" r="6.5" />
+                <circle cx="392" cy="100" r="2.8" />
+                <line x1="392" y1="91" x2="392" y2="94" />
+                <line x1="392" y1="106" x2="392" y2="109" />
+                <line x1="383" y1="100" x2="386" y2="100" />
+                <line x1="398" y1="100" x2="401" y2="100" />
+
+                {/* ── ROW 3 (y ~ 185-210) ── */}
+                {/* Layers – mid-left */}
+                <path d="M26 195 L40 188 L54 195 L40 202Z" />
+                <path d="M26 202 L40 195 L54 202" />
+                <path d="M26 209 L40 202 L54 209" />
+                {/* Calendar – mid-center */}
+                <rect x="178" y="186" width="19" height="18" rx="3" />
+                <line x1="178" y1="193" x2="197" y2="193" />
+                <line x1="184" y1="183" x2="184" y2="189" />
+                <line x1="191" y1="183" x2="191" y2="189" />
+                {/* Checkmark circle – mid-right */}
+                <circle cx="392" cy="198" r="9" />
+                <path d="M386 198 L390 202 L398 193" />
+
+                {/* ── ROW 4 (y ~ 290-315) ── */}
+                {/* Folder – lower-left */}
+                <path d="M22 292 L31 292 L33 296 L52 296 A1.5 1.5 0 0 1 53.5 297.5 L53.5 310 A1.5 1.5 0 0 1 52 311.5 L22 311.5 A1.5 1.5 0 0 1 20.5 310 L20.5 293.5 A1.5 1.5 0 0 1 22 292Z" />
+                {/* Bar chart – lower-center */}
+                <rect x="178" y="303" width="5" height="12" rx="1" />
+                <rect x="186" y="297" width="5" height="18" rx="1" />
+                <rect x="194" y="292" width="5" height="23" rx="1" />
+                <line x1="175" y1="315" x2="202" y2="315" />
+                {/* Target – lower-right */}
+                <circle cx="392" cy="302" r="10" />
+                <circle cx="392" cy="302" r="5.5" />
+                <circle cx="392" cy="302" r="1.5" fill="#C4B8F0" />
+
+                {/* ── ROW 5 (y ~ 395-415 beside description margins) ── */}
+                {/* Paperclip – outer left */}
+                <path d="M25 400 C21 396 15 402 18 406 L29 417 C33 422 40 415 36 411 L25 400 C22 397 18 401 20 404 L30 414" />
+                {/* Target rings – outer right */}
+                <circle cx="430" cy="405" r="9" />
+                <circle cx="430" cy="405" r="4.5" />
+
+                {/* ── ROW 6 (y ~ 490-525, directly under Description box) ── */}
+                {/* Checklist clipboard – left */}
+                <rect x="35" y="495" width="16" height="20" rx="3" />
+                <line x1="40" y1="502" x2="47" y2="502" />
+                <line x1="40" y1="506" x2="47" y2="506" />
+                <line x1="40" y1="510" x2="45" y2="510" />
+                {/* Stopwatch / Clock – center-left */}
+                <circle cx="165" cy="505" r="10" />
+                <line x1="165" y1="499" x2="165" y2="505" />
+                <line x1="165" y1="505" x2="171" y2="508" />
+                <line x1="162" y1="493" x2="168" y2="493" />
+                {/* Target concentric bullseye – center-right */}
+                <circle cx="285" cy="505" r="11" />
+                <circle cx="285" cy="505" r="6" />
+                <circle cx="285" cy="505" r="1.8" fill="#C4B8F0" />
+                {/* Folder – right */}
+                <path d="M390 496 L399 496 L401 500 L418 500 A1.5 1.5 0 0 1 419.5 501.5 L419.5 514 A1.5 1.5 0 0 1 418 515.5 L390 515.5 A1.5 1.5 0 0 1 388.5 514 L388.5 497.5 A1.5 1.5 0 0 1 390 496Z" />
+
+                {/* ── ROW 7 (y ~ 600-635, middle-lower section) ── */}
+                {/* Checkmark badge – left */}
+                <circle cx="65" cy="615" r="10.5" />
+                <path d="M59 615 L63 619 L71 611" />
+                {/* Mini Calendar – center-left */}
+                <rect x="180" y="605" width="20" height="19" rx="3.5" />
+                <line x1="180" y1="612" x2="200" y2="612" />
+                <line x1="186" y1="602" x2="186" y2="607" />
+                <line x1="194" y1="602" x2="194" y2="607" />
+                {/* Rocket vector – center-right */}
+                <g transform="translate(295,605) rotate(42)">
+                  <path d="M0-9 C3-6 4-1 4 4L-4 4C-4-1-3-6 0-9Z" />
+                  <circle cx="0" cy="0" r="1.5" />
+                  <path d="M-4 1L-7 5L-4 5.5Z" />
+                  <path d="M4 1L7 5L4 5.5Z" />
+                </g>
+                {/* Paperclip – right */}
+                <path d="M405 605 C401 601 395 607 398 611 L409 622 C413 627 420 620 416 616 L405 605 C402 602 398 606 400 609 L410 619" />
+
+                {/* ── ROW 8 (y ~ 700-740, right above footer divider) ── */}
+                {/* Analytics bar chart – left */}
+                <rect x="38" y="720" width="5" height="12" rx="1" />
+                <rect x="46" y="714" width="5" height="18" rx="1" />
+                <rect x="54" y="708" width="5" height="24" rx="1" />
+                <line x1="35" y1="732" x2="62" y2="732" />
+                {/* Mail envelope – center-left */}
+                <rect x="155" y="712" width="20" height="14" rx="2.5" />
+                <path d="M155 714 L165 721 L175 714" />
+                {/* Flag on pole – center-right */}
+                <line x1="280" y1="708" x2="280" y2="734" />
+                <path d="M280 708 L298 714 L280 720Z" />
+                {/* Clock / Timer – right */}
+                <circle cx="400" cy="720" r="9.5" />
+                <line x1="400" y1="714" x2="400" y2="720" />
+                <line x1="400" y1="720" x2="405" y2="723" />
+              </g>
+
+              {/* Accent dots distributed across the whole height */}
+              <g fill="#C4B8F0" opacity="0.50">
+                <circle cx="130" cy="45" r="2.2" />
+                <circle cx="315" cy="72" r="1.8" />
+                <circle cx="140" cy="158" r="1.6" />
+                <circle cx="348" cy="145" r="2" />
+                <circle cx="108" cy="250" r="1.8" />
+                <circle cx="262" cy="268" r="1.5" />
+                <circle cx="418" cy="248" r="1.8" />
+                <circle cx="128" cy="365" r="1.6" />
+                <circle cx="298" cy="378" r="2" />
+                <circle cx="445" cy="362" r="1.8" />
+                {/* Lower zone accent dots */}
+                <circle cx="100" cy="485" r="2.2" />
+                <circle cx="225" cy="520" r="1.8" />
+                <circle cx="345" cy="490" r="2.0" />
+                <circle cx="440" cy="530" r="1.6" />
+                <circle cx="115" cy="595" r="2.0" />
+                <circle cx="250" cy="625" r="1.8" />
+                <circle cx="350" cy="600" r="2.2" />
+                <circle cx="105" cy="710" r="1.8" />
+                <circle cx="220" cy="735" r="2.0" />
+                <circle cx="340" cy="720" r="1.8" />
+                <circle cx="445" cy="710" r="2.2" />
+              </g>
+
+              {/* Tiny curved strokes across the whole height */}
+              <g fill="none" stroke="#C4B8F0" strokeWidth="0.9" opacity="0.45">
+                <path d="M152 128 Q160 120 168 128" />
+                <path d="M288 182 Q296 174 304 182" />
+                <path d="M104 238 Q112 230 120 238" />
+                <path d="M328 288 Q336 280 344 288" />
+                <path d="M152 358 Q160 350 168 358" />
+                {/* Lower zone curved strokes */}
+                <path d="M80 540 Q88 532 96 540" />
+                <path d="M320 545 Q328 537 336 545" />
+                <path d="M140 650 Q148 642 156 650" />
+                <path d="M310 655 Q318 647 326 655" />
+                <path d="M180 750 Q188 742 196 750" />
+              </g>
+            </svg>
+
+            {/* Scrollable form – sits above the fixed pattern */}
+            <div className="relative z-10 h-full overflow-y-auto px-6 py-5 space-y-4">
+              {/* Project Select */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-[#172033] dark:text-slate-200">
+                  Project <span className="text-red-500">*</span>
+                </Label>
+                <Select
+                  value={stepDrawerForm.projectId}
+                  onValueChange={(val) => setStepDrawerForm((prev) => ({ ...prev, projectId: val }))}
+                >
+                  <SelectTrigger className="h-9 text-xs rounded-xl border-[#E3DDF8] dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:ring-[#A78BFA] focus:border-[#A78BFA]">
+                    <SelectValue placeholder="Select a project" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[250px] rounded-xl z-[110]">
+                    {projects.map((p: any) => (
+                      <SelectItem key={p.id} value={String(p.id)} className="text-xs">
+                        {p.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Step Title */}
+              <div className="space-y-1.5">
+                <Label htmlFor="stepTitle2" className="text-xs font-bold text-[#172033] dark:text-slate-200">
+                  Step Title <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="stepTitle2"
+                  placeholder="e.g., Initial Design Review"
+                  value={stepDrawerForm.title}
+                  onChange={(e) => setStepDrawerForm((prev) => ({ ...prev, title: e.target.value }))}
+                  className="h-9 text-xs rounded-xl border-[#E3DDF8] dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus-visible:ring-[#A78BFA] focus-visible:border-[#A78BFA]"
+                />
+              </div>
+
+              {/* Status Select */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-[#172033] dark:text-slate-200">
+                  Status
+                </Label>
+                <Select
+                  value={stepDrawerForm.status}
+                  onValueChange={(val: any) => setStepDrawerForm((prev) => ({ ...prev, status: val }))}
+                >
+                  <SelectTrigger className="h-9 text-xs rounded-xl border-[#E3DDF8] dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm focus:ring-[#A78BFA]">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl z-[110]">
+                    <SelectItem value="pending">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-amber-500" />
+                        <span>Pending</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="in-progress">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-blue-500" />
+                        <span>In Progress</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="completed">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        <span>Completed</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="not started">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-slate-400" />
+                        <span>Not Started</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="cancelled">
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-rose-500" />
+                        <span>Cancelled</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Timeline: Start Date & End Date */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="stepStartDate2" className="text-xs font-medium text-[#172033] dark:text-slate-300">
+                    Start Date
+                  </Label>
+                  <div className="relative">
+                    <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#9B8FC7]" />
+                    <Input
+                      id="stepStartDate2"
+                      type="date"
+                      value={stepDrawerForm.startDate}
+                      onChange={(e) => {
+                        const newStart = e.target.value;
+                        setStepDrawerForm((prev) => ({
+                          ...prev,
+                          startDate: newStart,
+                          endDate: prev.endDate && newStart && prev.endDate < newStart ? newStart : prev.endDate,
+                        }));
+                      }}
+                      className="pl-8 h-9 text-xs rounded-xl border-[#E3DDF8] dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="stepEndDate2" className="text-xs font-medium text-[#172033] dark:text-slate-300">
+                    End Date
+                  </Label>
+                  <div className="relative">
+                    <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#9B8FC7]" />
+                    <Input
+                      id="stepEndDate2"
+                      type="date"
+                      value={stepDrawerForm.endDate}
+                      min={stepDrawerForm.startDate || undefined}
+                      onChange={(e) => setStepDrawerForm((prev) => ({ ...prev, endDate: e.target.value }))}
+                      className="pl-8 h-9 text-xs rounded-xl border-[#E3DDF8] dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="space-y-1.5">
+                <Label htmlFor="stepDesc2" className="text-xs font-medium text-[#172033] dark:text-slate-300">
+                  Description{" "}
+                  <span className="text-[11px] text-[#71809A] font-normal">(optional)</span>
+                </Label>
+                <Textarea
+                  id="stepDesc2"
+                  placeholder="Describe this key step goals and deliverables..."
+                  value={stepDrawerForm.description}
+                  onChange={(e) => setStepDrawerForm((prev) => ({ ...prev, description: e.target.value }))}
+                  className="min-h-[85px] text-xs rounded-xl border-[#E3DDF8] dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm resize-none focus-visible:ring-[#A78BFA] focus-visible:border-[#A78BFA]"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* ── FOOTER – pure white, no pattern ── */}
+          <div className="px-6 py-4 border-t border-[#EAE5FF] dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-end gap-3 flex-shrink-0 relative z-10">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setStepDrawerOpen(false); setEditingStep(null); }}
+              className="h-10 px-5 text-xs font-semibold rounded-xl border-[#DDD8F0] dark:border-slate-700 bg-white dark:bg-slate-900 text-[#172033] dark:text-slate-200 hover:bg-[#F5F1FF] dark:hover:bg-slate-800 transition-colors"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={isSavingStep}
+              onClick={handleSaveStep}
+              className="h-10 px-6 text-xs font-semibold rounded-xl bg-[#7652E8] hover:bg-[#6241D4] text-white shadow-[0_4px_14px_rgba(118,82,232,0.35)] hover:shadow-[0_4px_18px_rgba(118,82,232,0.45)] active:scale-[0.98] transition-all cursor-pointer"
+            >
+              {isSavingStep ? "Saving..." : editingStep ? "Update Step" : "+ Create Step"}
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* BLUE LOTTIE DELETE CONFIRMATION MODAL (Single Key Step) */}
+      <DeleteConfirmModal
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title="Delete Key Step"
+        itemName={stepToDelete?.title}
+        description="Are you sure you want to delete this key step? All tasks and deliverables mapped to this step will be permanently removed."
+        confirmText="Delete Step"
+        onConfirm={executeDeleteStep}
+      />
+
+      {/* BLUE LOTTIE DELETE CONFIRMATION MODAL (Bulk Delete) */}
+      <DeleteConfirmModal
+        open={bulkDeleteConfirmOpen}
+        onOpenChange={setBulkDeleteConfirmOpen}
+        title="Delete Selected Key Steps"
+        itemName={`${selectedKeystepIds.length} Key Steps`}
+        description={`Are you sure you want to delete ${selectedKeystepIds.length} selected key steps? This action cannot be undone.`}
+        confirmText={`Delete ${selectedKeystepIds.length} Steps`}
+        onConfirm={executeBulkDelete}
+      />
+
+      {/* SUCCESS SEND LOTTIE MODAL (Key Step Created) */}
+      <SuccessSendModal
+        open={createdStepSuccessOpen}
+        onOpenChange={setCreatedStepSuccessOpen}
+        title="Key Step Created!"
+        itemName={createdStepTitle}
+        description="Successfully scheduled and dispatched to the project roadmap."
+      />
+
+      {/* SUCCESS CELEBRATION (KEY STEP COMPLETED) MODAL */}
+      <SuccessCelebrationModal
+        open={celebrationModalOpen}
+        onOpenChange={setCelebrationModalOpen}
+        title="Key Step Completed!"
+        itemName={celebrationStepTitle}
+        description="Milestone reached! Great work completing this key step phase."
+      />
     </div>
   );
 }

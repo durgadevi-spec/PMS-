@@ -1,0 +1,5 @@
+{
+  "name": "supabase-db",
+  "description": "Direct Supabase PostgreSQL connection & Persistent Memory MCP"
+}
+

@@ -10,6 +10,8 @@ import { db } from "./db.ts";
 import { eq, and, or, inArray } from "drizzle-orm";
 import {
     projectTasks,
+    keySteps,
+    projects,
     taskDependencies,
     taskScheduleHistory,
     type ProjectTask,
@@ -52,6 +54,35 @@ function addDays(dateStr: string, days: number): string {
 function diffDays(a: string, b: string): number {
     // a - b, in whole days
     return Math.round((toUTCDate(a).getTime() - toUTCDate(b).getTime()) / DAY_MS);
+}
+
+async function extendAssociatedKeyStep(taskId: string, days: number) {
+    if (days <= 0) return;
+    const [task] = await db
+        .select({ keyStepId: projectTasks.keyStepId })
+        .from(projectTasks)
+        .where(eq(projectTasks.id, taskId));
+    if (!task?.keyStepId) return;
+
+    const [step] = await db
+        .select({ endDate: keySteps.endDate, projectId: keySteps.projectId })
+        .from(keySteps)
+        .where(eq(keySteps.id, task.keyStepId));
+    if (!step?.endDate) return;
+
+    const extendedEndDate = addDays(step.endDate, days);
+    await db.update(keySteps)
+        .set({ endDate: extendedEndDate })
+        .where(eq(keySteps.id, task.keyStepId));
+    const [project] = await db
+        .select({ endDate: projects.endDate })
+        .from(projects)
+        .where(eq(projects.id, step.projectId));
+    if (project?.endDate && project.endDate < extendedEndDate) {
+        await db.update(projects)
+            .set({ endDate: extendedEndDate, updatedAt: new Date() })
+            .where(eq(projects.id, step.projectId));
+    }
 }
 
 /** Inclusive day-count duration, e.g. 10 Jul -> 12 Jul = 3 days. Minimum 1. */
@@ -381,6 +412,7 @@ export async function applyScheduleChange(
     // to the tasks that depend on this one.
     const deltaStart = oldStart && newStart ? diffDays(newStart, oldStart) : 0;
     const deltaEnd = oldEnd && newEnd ? diffDays(newEnd, oldEnd) : 0;
+    await extendAssociatedKeyStep(taskId, deltaEnd);
 
     const cascaded: any[] = [];
     if (deltaStart !== 0 || deltaEnd !== 0) {
@@ -501,6 +533,7 @@ export async function recordManualChangeAndCascade(
 
     const deltaStart = before.startDate && after.startDate ? diffDays(after.startDate, before.startDate) : 0;
     const deltaEnd = before.endDate && after.endDate ? diffDays(after.endDate, before.endDate) : 0;
+    await extendAssociatedKeyStep(taskId, deltaEnd);
 
     const cascaded: any[] = [];
     if (deltaStart !== 0 || deltaEnd !== 0) {

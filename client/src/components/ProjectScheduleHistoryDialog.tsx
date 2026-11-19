@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { apiFetch } from "@/lib/apiClient";
+import { cn } from "@/lib/utils";
 import { exportScheduleHistoryToPDF, SCHEDULE_HISTORY_COLUMNS } from "@/lib/pdfExport";
 
 // This dialog always shows the Task column (it lists changes across every
@@ -103,8 +104,13 @@ export default function ProjectScheduleHistoryDialog({ projectId, projectTitle }
 
     return (
         <>
-            <Button variant="outline" size="sm" className="gap-2" onClick={() => setOpen(true)}>
-                <History className="h-4 w-4" />
+            <Button
+                variant="outline"
+                size="sm"
+                className="group gap-2 bg-indigo-50/90 hover:bg-indigo-600 text-indigo-700 hover:text-white border-indigo-200/90 hover:border-indigo-600 shadow-xs hover:shadow-md transition-all duration-200 active:scale-95 font-semibold"
+                onClick={() => setOpen(true)}
+            >
+                <History className="h-4 w-4 transition-transform duration-300 group-hover:-rotate-45" />
                 Project History
             </Button>
             <Dialog open={open} onOpenChange={setOpen}>
@@ -114,12 +120,11 @@ export default function ProjectScheduleHistoryDialog({ projectId, projectTitle }
                         <Popover open={exportColSelOpen} onOpenChange={setExportColSelOpen}>
                             <PopoverTrigger asChild>
                                 <Button
-                                    variant="outline"
                                     size="sm"
-                                    className="h-7 gap-1.5 text-xs shrink-0"
+                                    className="group h-8 px-3 gap-1.5 text-xs font-semibold shrink-0 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-xs hover:shadow-md transition-all duration-200 active:scale-95 border-none"
                                     disabled={loading || entries.length === 0}
                                 >
-                                    <Download className="h-3.5 w-3.5" /> Download PDF
+                                    <Download className="h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-y-0.5" /> Download PDF
                                 </Button>
                             </PopoverTrigger>
                             <PopoverContent className="w-60 p-3" align="end" onOpenAutoFocus={(e) => e.preventDefault()}>
@@ -159,7 +164,7 @@ export default function ProjectScheduleHistoryDialog({ projectId, projectTitle }
                                     </div>
                                     <Button
                                         size="sm"
-                                        className="w-full text-xs"
+                                        className="w-full text-xs font-semibold bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-xs hover:shadow-md transition-all active:scale-95"
                                         onClick={handleDownloadPdf}
                                         disabled={selectedExportCols.length === 0}
                                     >
@@ -219,33 +224,65 @@ export default function ProjectScheduleHistoryDialog({ projectId, projectTitle }
                             <p className="text-sm text-muted-foreground">No schedule changes recorded yet.</p>
                         )}
                         <div className="space-y-3">
-                            {entries.map((e) => (
-                                <div key={e.id} className="border rounded-md p-3 text-sm space-y-1">
-                                    <div className="flex items-center justify-between">
-                                        <span className="font-medium">{e.taskName || "Unknown task"}</span>
-                                        <span className="text-xs text-muted-foreground">
-                                            {new Date(e.changedAt).toLocaleString()}
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Badge variant={e.changeType === "Manual" ? "secondary" : "outline"}>{e.changeType}</Badge>
-                                        {e.changedByName && (
-                                            <span className="text-xs text-muted-foreground">by {e.changedByName}</span>
+                            {entries.map((e) => {
+                                const isManual = e.changeType === "Manual";
+                                return (
+                                    <div
+                                        key={e.id}
+                                        className={cn(
+                                            "rounded-xl border p-3.5 text-sm space-y-2 transition-all duration-200 hover:-translate-y-0.5",
+                                            "shadow-[0_2px_8px_rgba(0,0,0,0.05),0_1px_2px_rgba(0,0,0,0.03)] hover:shadow-[0_6px_18px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.02]",
+                                            isManual
+                                                ? "border-slate-200/90 dark:border-slate-700/80 border-l-4 border-l-indigo-500 bg-gradient-to-r from-indigo-50/25 via-white to-white dark:from-indigo-950/20 dark:via-slate-800 dark:to-slate-800"
+                                                : "border-slate-200/90 dark:border-slate-700/80 border-l-4 border-l-amber-500 bg-gradient-to-r from-amber-50/25 via-white to-white dark:from-amber-950/20 dark:via-slate-800 dark:to-slate-800"
                                         )}
+                                    >
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="font-bold text-slate-900 dark:text-slate-100 text-sm tracking-tight truncate">
+                                                {e.taskName || "Unknown task"}
+                                            </span>
+                                            <span className="text-[11px] text-slate-500 font-medium shrink-0">
+                                                {new Date(e.changedAt).toLocaleString()}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-xs">
+                                            <Badge
+                                                className={cn(
+                                                    "text-[10px] px-2 py-0.5 font-semibold rounded-md border",
+                                                    isManual
+                                                        ? "bg-indigo-100/80 text-indigo-700 border-indigo-200/80 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800"
+                                                        : "bg-amber-100/80 text-amber-800 border-amber-200/80 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800"
+                                                )}
+                                            >
+                                                {e.changeType}
+                                            </Badge>
+                                            {e.changedByName && (
+                                                <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">by {e.changedByName}</span>
+                                            )}
+                                        </div>
+                                        {(e.previousStartDate !== e.newStartDate) && (
+                                            <div className="text-xs text-slate-600 dark:text-slate-300 flex items-center gap-1.5 flex-wrap pt-0.5">
+                                                <span className="font-semibold text-slate-500">Start:</span>
+                                                <span className="line-through text-slate-400">{formatDate(e.previousStartDate)}</span>
+                                                <span className="text-slate-400">➔</span>
+                                                <span className="font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 px-1.5 py-0.5 rounded border border-indigo-200/70">{formatDate(e.newStartDate)}</span>
+                                            </div>
+                                        )}
+                                        {(e.previousEndDate !== e.newEndDate) && (
+                                            <div className="text-xs text-slate-600 dark:text-slate-300 flex items-center gap-1.5 flex-wrap pt-0.5">
+                                                <span className="font-semibold text-slate-500">End:</span>
+                                                <span className="line-through text-slate-400">{formatDate(e.previousEndDate)}</span>
+                                                <span className="text-slate-400">➔</span>
+                                                <span className="font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 px-1.5 py-0.5 rounded border border-indigo-200/70">{formatDate(e.newEndDate)}</span>
+                                            </div>
+                                        )}
+                                        <div className="text-xs text-slate-500 dark:text-slate-400 pt-1.5 border-t border-slate-100 dark:border-slate-700/60 flex items-baseline gap-1.5">
+                                            <span className="font-semibold text-slate-700 dark:text-slate-300">Reason:</span>
+                                            <span className="italic">{e.reason || "—"}</span>
+                                        </div>
                                     </div>
-                                    {(e.previousStartDate !== e.newStartDate) && (
-                                        <div>
-                                            Start: {formatDate(e.previousStartDate)} → {formatDate(e.newStartDate)}
-                                        </div>
-                                    )}
-                                    {(e.previousEndDate !== e.newEndDate) && (
-                                        <div>
-                                            End: {formatDate(e.previousEndDate)} → {formatDate(e.newEndDate)}
-                                        </div>
-                                    )}
-                                    <div className="text-muted-foreground">Reason: {e.reason || "—"}</div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </ScrollArea>
                 </DialogContent>

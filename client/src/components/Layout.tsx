@@ -23,11 +23,15 @@ import {
   FileText,
   Ticket,
   Trophy,
-  Medal
+  Medal,
+  Sun,
+  Moon,
+  HelpCircle
 } from "lucide-react";
 
 // UI Components
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -61,6 +65,8 @@ import { PROJECTS, USERS } from "@/lib/mockData";
 import { apiFetch, clearApiCache } from "@/lib/apiClient";
 import { queryClient } from "@/lib/queryClient";
 import companyLogo from "@/pages/logo.jpg";
+import logoDarkSidebar from "@/assets/logo-dark-sidebar.png";
+import logoLightSidebar from "@/assets/logo-light-sidebar.png";
 import FreezeButton from "@/components/FreezeButton";
 
 
@@ -194,6 +200,7 @@ const NAV_ITEMS = [
   { label: "Projects", href: "/projects", icon: Folder },
   { label: "Key Steps", href: "/key-steps", icon: FolderKanban },
   { label: "Tasks", href: "/tasks", icon: CheckCircle2 },
+  { label: "Task Date Approvals", href: "/task-date-approvals", icon: CheckCircle2, adminOnly: true },
   { label: "Completed", href: "/completed", icon: Archive },
   { label: "Team", href: "/users", icon: UsersIcon },
 
@@ -206,9 +213,36 @@ const NAV_ITEMS = [
   { label: "Settings", href: "/settings", icon: Settings, adminOnly: true },
 ];
 
+// --- Sidebar Theme Manager ---
+export function useSidebarTheme() {
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    return (localStorage.getItem("pms_sidebar_theme") as "dark" | "light") || "dark";
+  });
+
+  useEffect(() => {
+    const handleThemeChange = (e: any) => {
+      if (e.detail?.theme) {
+        setTheme(e.detail.theme);
+      }
+    };
+    window.addEventListener("pms-sidebar-theme-change", handleThemeChange);
+    return () => window.removeEventListener("pms-sidebar-theme-change", handleThemeChange);
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    localStorage.setItem("pms_sidebar_theme", next);
+    window.dispatchEvent(new CustomEvent("pms-sidebar-theme-change", { detail: { theme: next } }));
+  };
+
+  return { theme, toggleTheme, isDark: theme === "dark" };
+}
+
 export function Sidebar() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const { isAdmin } = useAuth();
+  const { isDark, toggleTheme } = useSidebarTheme();
   const SHOW_TEAM = import.meta.env.VITE_SHOW_TEAM === "true";
 
   const filteredNav = NAV_ITEMS.filter((item) => {
@@ -219,38 +253,69 @@ export function Sidebar() {
   });
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-sidebar text-sidebar-foreground">
-      <div className="flex h-16 items-center justify-center border-b border-sidebar-border px-6">
-        <img
-          src={companyLogo}
-          alt="Company Logo"
-          className="h-12 object-contain"
-        />
+    <div
+      className={`flex h-full w-56 flex-col select-none transition-colors duration-200 ${
+        isDark
+          ? "bg-[#5D5FEF] text-white border-r border-[#4E50E6]/40"
+          : "bg-white text-slate-800 border-r border-slate-200/90 shadow-[2px_0_12px_rgba(0,0,0,0.02)]"
+      }`}
+    >
+      {/* Top Header Logo - Centered & Prominently Sized */}
+      <div className="h-20 flex items-center justify-center px-4 pt-3 pb-1 flex-shrink-0">
+        <Link href="/" className="flex items-center justify-center w-full cursor-pointer transition-transform hover:scale-105 active:scale-95">
+          {isDark ? (
+            <img
+              src={logoDarkSidebar}
+              alt="Knockturn"
+              className="h-[40px] w-auto max-w-[172px] object-contain drop-shadow-sm"
+            />
+          ) : (
+            <img
+              src={logoLightSidebar}
+              alt="Knockturn"
+              className="h-[40px] w-auto max-w-[172px] object-contain"
+            />
+          )}
+        </Link>
       </div>
 
       <div className="flex-1 overflow-y-auto py-4">
-        <nav className="space-y-1 px-3">
+        <nav className="space-y-1.5 px-3">
           {filteredNav.map((item) => {
             const isActive = location === item.href;
             const isUnderConstruction = (item as any).underConstruction;
 
             const content = (
               <div
-                className={`group relative flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors
-                ${isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50"
-                  }`}
+                className={`group relative flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all duration-200 ${
+                  isActive
+                    ? isDark
+                      ? "bg-[#4845D8] text-white shadow-inner border border-white/15 font-semibold"
+                      : "bg-[#5D5FEF] text-white shadow-[0_4px_14px_rgba(93,95,239,0.35)] border border-[#5D5FEF] font-semibold"
+                    : isDark
+                      ? "text-white/85 hover:bg-white/10 hover:text-white border border-transparent"
+                      : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 border border-transparent"
+                }`}
               >
                 <div className="flex items-center gap-3">
                   <item.icon
-                    className={`h-4 w-4 ${isActive ? "text-primary" : "text-sidebar-foreground/50"}`}
+                    className={`h-4 w-4 transition-colors ${
+                      isActive
+                        ? "text-white"
+                        : isDark
+                          ? "text-white/75 group-hover:text-white"
+                          : "text-slate-400 group-hover:text-slate-700"
+                    }`}
                   />
-                  {item.label}
+                  <span>{item.label}</span>
                 </div>
                 {isUnderConstruction && (
                   <div className="flex h-1.5 w-1.5 items-center justify-center">
-                    <div className="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse" />
+                    <div
+                      className={`h-1.5 w-1.5 rounded-full animate-pulse ${
+                        isDark ? "bg-amber-300" : "bg-amber-500"
+                      }`}
+                    />
                   </div>
                 )}
               </div>
@@ -290,6 +355,55 @@ export function Sidebar() {
           })}
         </nav>
       </div>
+
+      {/* Bottom Action Area: Support Button + Light/Dark Mode Switch */}
+      <div className={`p-3 mt-auto ${isDark ? "border-t border-white/10" : "border-t border-slate-200/80"}`}>
+        {/* Support Button */}
+        <button
+          type="button"
+          onClick={() => setLocation("/tickets")}
+          className={`w-full flex items-center justify-center gap-2 rounded-xl py-2.5 px-4 text-xs font-semibold transition-all duration-200 cursor-pointer shadow-sm active:scale-95 ${
+            isDark
+              ? "bg-white text-[#5D5FEF] hover:bg-slate-50 font-bold shadow-md shadow-black/10"
+              : "bg-[#5D5FEF] text-white hover:bg-[#4E50E6] shadow-md shadow-[#5D5FEF]/25"
+          }`}
+        >
+          <HelpCircle className={`h-4 w-4 ${isDark ? "text-[#5D5FEF]" : "text-white"}`} />
+          <span>Support</span>
+        </button>
+
+        {/* Light / Dark Mode Toggle Row */}
+        <div
+          className={`mt-2.5 flex items-center justify-between rounded-xl px-3 py-2 text-xs font-medium transition-all ${
+            isDark
+              ? "bg-white/10 text-white/90 border border-white/10"
+              : "bg-slate-100/90 text-slate-700 border border-slate-200/70"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {isDark ? (
+              <>
+                <Sun className="h-3.5 w-3.5 text-amber-300" />
+                <span className="font-semibold text-white">Light Mode</span>
+              </>
+            ) : (
+              <>
+                <Moon className="h-3.5 w-3.5 text-slate-500" />
+                <span className="font-semibold text-slate-700">Dark Mode</span>
+              </>
+            )}
+          </div>
+          <Switch
+            checked={isDark}
+            onCheckedChange={toggleTheme}
+            className={
+              isDark
+                ? "data-[state=checked]:bg-white/35 data-[state=unchecked]:bg-white/20 border-white/20"
+                : "data-[state=checked]:bg-[#5D5FEF] data-[state=unchecked]:bg-slate-300"
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -299,6 +413,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout: authLogout, refresh } = useAuth();
   const [, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const { isDark } = useSidebarTheme();
 
   const [profileData, setProfileData] = useState({
     bio: "Professional project manager.",
@@ -367,7 +482,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="lg:hidden"><Menu /></Button>
               </SheetTrigger>
-              <SheetContent side="left" className="p-0 w-64"><Sidebar /></SheetContent>
+              <SheetContent side="left" className={`p-0 w-56 border-none ${isDark ? "bg-[#5D5FEF]" : "bg-white"}`}><Sidebar /></SheetContent>
             </Sheet>
             <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} className="hidden lg:flex"><Menu /></Button>
           </div>

@@ -79,6 +79,9 @@ import { TaskFilters, CustomFilter } from "@/components/TaskFilters";
 import GanttDependencyDialog from "@/components/GanttDependencyDialog";
 import { useScheduleChangeReason } from "@/components/ScheduleChangeReasonDialog";
 import TaskScheduleHistoryDialog from "@/components/TaskScheduleHistoryDialog";
+import { DeleteConfirmModal } from "@/components/DeleteConfirmModal";
+import { TaskInitialSetupBadge } from "@/components/TaskInitialSetupIndicator";
+import { isTaskInInitialSetup } from "@shared/taskInitialSetup";
 import logoImg from "./logo.jpg";
 
 /* ================= TYPES ================= */
@@ -138,9 +141,11 @@ interface Task {
   isAddon?: boolean;
   isIssue?: boolean;
   createdAt?: string;
+  initialSetupExpiresAt?: string | null;
   completedAt?: string;
   completionDate?: string;
   durationDays?: number | null;
+  pendingDateApproval?: boolean;
   tags?: Tag[];
   parentTaskId?: string | null;
 }
@@ -660,24 +665,14 @@ function ManageTagsDialog({ allTags, setAllTags, setTasks }: { allTags: any[], s
       </DialogContent>
 
       {/* DELETE TAG CONFIRM DIALOG */}
-      <Dialog open={!!deleteTagTarget} onOpenChange={(o) => !o && setDeleteTagTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Tag</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm">
-            Delete <span className="font-bold">{deleteTagTarget?.name}</span>? This will remove it from all tasks.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTagTarget(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleDeleteTag}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteConfirmModal
+        open={!!deleteTagTarget}
+        onOpenChange={(o) => !o && setDeleteTagTarget(null)}
+        title="Delete Tag?"
+        itemName={deleteTagTarget?.name}
+        description="This will permanently delete this tag and remove it from all associated tasks."
+        onConfirm={handleDeleteTag}
+      />
     </Dialog>
   );
 }
@@ -1580,14 +1575,21 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     value: any,
     scheduleReasonOptions?: { skipPrompt?: boolean; forcedReason?: { reason: string; reasonCategory: string } }
   ) => {
-    // Task Dependency & Automatic Schedule Management: a manual change to
-    // Start Date, End Date, or Duration made here (inline, in the Tasks
-    // table) requires a reason — but only when it's an actual *change* to a
-    // date that was already set. Filling in a date/duration that was
-    // previously empty ("----") is a first-time entry, not a reschedule, so
-    // no reason is needed for that.
+    // Date changes skip the reason prompt during Initial Setup. After that,
+    // new tasks always require a reason; legacy tasks retain the existing
+    // filled-date/overdue prompt behavior.
     const isScheduleField = field === "startDate" || field === "endDate" || field === "durationDays";
     const taskBeforeEdit = tasks.find(t => t.id === taskId);
+    const todayDate = new Date().toISOString().slice(0, 10);
+    const taskIsOverdue = Boolean(
+      taskBeforeEdit?.endDate &&
+      taskBeforeEdit.endDate < todayDate &&
+      !["completed", "cancelled", "canceled"].includes(String(taskBeforeEdit.status).toLowerCase())
+    );
+    const setupActive = isTaskInInitialSetup(taskBeforeEdit?.initialSetupExpiresAt);
+    const setupExpired = Boolean(taskBeforeEdit?.initialSetupExpiresAt) && !setupActive;
+    const dateApprovalExpected =
+      isScheduleField && !setupActive && (setupExpired || taskIsOverdue) && !isAdmin;
     const hadExistingValue = taskBeforeEdit
       ? (taskBeforeEdit as any)[field] !== null && (taskBeforeEdit as any)[field] !== undefined && (taskBeforeEdit as any)[field] !== ""
       : false;
@@ -1626,10 +1628,11 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     }
 
     let scheduleReasonPayload = scheduleReasonOptions?.forcedReason || null;
-    if (isScheduleField && hadExistingValue && !scheduleReasonPayload && !scheduleReasonOptions?.skipPrompt) {
+    const reasonRequired = setupExpired || (!taskBeforeEdit?.initialSetupExpiresAt && (hadExistingValue || taskIsOverdue));
+    if (isScheduleField && !setupActive && reasonRequired && !scheduleReasonPayload && !scheduleReasonOptions?.skipPrompt) {
       inlineUpdateInFlightRef.current = updateKey;
       try {
-        const result = await requestReason();
+        const result = await requestReason({ requireExplanation: taskIsOverdue });
         scheduleReasonPayload = { reason: result.reason, reasonCategory: result.reasonCategory };
       } catch {
         // User cancelled the reason prompt — abort this edit entirely,
@@ -1696,8 +1699,9 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     // Optimistic update
     setTasks(prev => prev.map(t => t.id === taskId ? {
       ...t,
-      [field]: value,
-      ...(typeof computedEndDateForDuration !== 'undefined' ? { endDate: computedEndDateForDuration } : {}),
+      ...(!dateApprovalExpected ? { [field]: value } : {}),
+      ...(!dateApprovalExpected && typeof computedEndDateForDuration !== 'undefined' ? { endDate: computedEndDateForDuration } : {}),
+      ...(dateApprovalExpected ? { pendingDateApproval: true } : {}),
       ...(isCompletingStatus ? { progress: 100 } : {}),
     } : t));
     setEditingTaskField(null);
@@ -1705,7 +1709,9 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     // Notify other components in the same window to update their local caches
     try {
       const payloadField = field === "taskMembers" ? "assignedMembers" : field;
-      window.dispatchEvent(new CustomEvent('task.updated', { detail: { taskId, field: payloadField, value } }));
+      if (!dateApprovalExpected) {
+        window.dispatchEvent(new CustomEvent('task.updated', { detail: { taskId, field: payloadField, value } }));
+      }
     } catch (err) {
       // ignore
     }
@@ -1730,12 +1736,19 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       });
 
       if (!res.ok) throw new Error("Update failed");
+      const updateResult = await res.json();
 
       // Show success toast for important field updates
       if (["status", "priority", "keyStepId", "taskMembers"].includes(field)) {
         toast({
           title: "Updated",
           description: `Task ${field} has been saved.`,
+        });
+      }
+      if (updateResult.dateChangeApprovalPending) {
+        toast({
+          title: "Approval requested",
+          description: "The task date remains unchanged until an admin reviews your request.",
         });
       }
 
@@ -2644,8 +2657,10 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       isIssue: !!(t.isIssue || t.is_issue),
       parentTaskId: t.parentTaskId || t.parent_task_id || null,
       createdAt: t.createdAt || t.created_at || null,
+      initialSetupExpiresAt: t.initialSetupExpiresAt || t.initial_setup_expires_at || null,
       completedAt: t.completedAt || t.completed_at || null,
       completionDate: t.completionDate || t.completion_date || t.completedAt || t.completed_at || null,
+      pendingDateApproval: Boolean(t.pendingDateApproval || t.pending_date_approval),
       // Prefer an explicit subtaskCount from the server (bulk/admin view);
       // fall back to the length of a full subtasks array when the endpoint
       // sends one (per-project view still does, for now).
@@ -2692,6 +2707,31 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       return;
     }
 
+    let bulkScheduleReason: { reason: string; reasonCategory: string } | null = null;
+    const todayDate = new Date().toISOString().slice(0, 10);
+    const dateOnly = (value?: string | null) => value ? String(value).slice(0, 10) : "";
+    const tasksRequiringDateApproval = tasks.filter((task) =>
+      selectedTaskIds.includes(task.id) &&
+      ((bulkAssignStartDate && dateOnly(bulkAssignStartDate) !== dateOnly(task.startDate)) ||
+        (bulkAssignEndDate && dateOnly(bulkAssignEndDate) !== dateOnly(task.endDate))) &&
+      !isTaskInInitialSetup(task.initialSetupExpiresAt) &&
+      (
+        Boolean(task.initialSetupExpiresAt) ||
+        Boolean(
+          task.endDate &&
+          dateOnly(task.endDate) < todayDate &&
+          !["completed", "cancelled", "canceled"].includes(String(task.status).toLowerCase())
+        )
+      )
+    );
+    if (tasksRequiringDateApproval.length > 0) {
+      try {
+        bulkScheduleReason = await requestReason({ requireExplanation: true });
+      } catch {
+        return;
+      }
+    }
+
     // Store original state for rollback in case of error
     const originalTasks = tasks;
 
@@ -2702,8 +2742,9 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
           const updatedTask = { ...task };
 
           // Update dates if provided
-          if (bulkAssignStartDate) updatedTask.startDate = bulkAssignStartDate;
-          if (bulkAssignEndDate) updatedTask.endDate = bulkAssignEndDate;
+          const needsApproval = tasksRequiringDateApproval.some((approvalTask) => approvalTask.id === task.id);
+          if (!needsApproval && bulkAssignStartDate) updatedTask.startDate = bulkAssignStartDate;
+          if (!needsApproval && bulkAssignEndDate) updatedTask.endDate = bulkAssignEndDate;
           if (bulkAssignCompletionDate) updatedTask.completionDate = bulkAssignCompletionDate;
 
           // ADD members to existing ones (don't replace)
@@ -2729,6 +2770,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
           startDate: bulkAssignStartDate || null,
           endDate: bulkAssignEndDate || null,
           completionDate: bulkAssignCompletionDate || null,
+          ...(bulkScheduleReason ? { scheduleChangeReason: bulkScheduleReason.reason } : {}),
         }),
       });
 
@@ -4132,36 +4174,43 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
   };
 
   const StatusBadge = ({ task }: { task: Task }) => (
-    <Popover open={editingTaskField?.taskId === task.id && editingTaskField?.field === "status"}
-      onOpenChange={(open) => open ? startEditingTask(task.id, "status", task.status) : setEditingTaskField(null)}>
-      <PopoverTrigger asChild>
-        <button className="cursor-pointer hover:opacity-80 transition-opacity">
-          <Badge
-            variant="outline"
-            className={cn("text-[11px] font-bold px-2.5 py-0.5 rounded-full inline-flex justify-center min-w-[95px] border whitespace-nowrap", getStatusStyle(task.status))}
-          >
-            {task.status || "—"}
-          </Badge>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="p-0 w-40" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
-        <Command>
-          <CommandList>
-            <CommandGroup>
-              {["Pending", "Not Started", "Planned", "In Progress", "On Hold", "Completed", "Cancelled"].map((s) => (
-                <CommandItem
-                  key={s}
-                  onSelect={() => handleInlineTaskUpdate(task.id, "status", s)}
-                >
-                  <Check className={cn("mr-2 h-4 w-4", task.status === s ? "opacity-100" : "opacity-0")} />
-                  {s}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
+    <div className="flex flex-col items-center gap-1">
+      <Popover open={editingTaskField?.taskId === task.id && editingTaskField?.field === "status"}
+        onOpenChange={(open) => open ? startEditingTask(task.id, "status", task.status) : setEditingTaskField(null)}>
+        <PopoverTrigger asChild>
+          <button className="cursor-pointer hover:opacity-80 transition-opacity">
+            <Badge
+              variant="outline"
+              className={cn("text-[11px] font-bold px-2.5 py-0.5 rounded-full inline-flex justify-center min-w-[95px] border whitespace-nowrap", getStatusStyle(task.status))}
+            >
+              {task.status || "—"}
+            </Badge>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="p-0 w-40" align="center" onOpenAutoFocus={(e) => e.preventDefault()}>
+          <Command>
+            <CommandList>
+              <CommandGroup>
+                {["Pending", "Not Started", "Planned", "In Progress", "On Hold", "Completed", "Cancelled"].map((s) => (
+                  <CommandItem
+                    key={s}
+                    onSelect={() => handleInlineTaskUpdate(task.id, "status", s)}
+                  >
+                    <Check className={cn("mr-2 h-4 w-4", task.status === s ? "opacity-100" : "opacity-0")} />
+                    {s}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      <div className="flex flex-wrap justify-center gap-1">
+        {task.pendingDateApproval && (
+          <Badge className="bg-amber-100 text-amber-800 border border-amber-200 text-[9px] px-1.5 py-0">Pending Approval</Badge>
+        )}
+      </div>
+    </div>
   );
 
   const PriorityBadge = ({ task }: { task: Task }) => (
@@ -5793,6 +5842,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
                                                   )}
                                                 </TooltipContent>
                                               </Tooltip>
+                                              <TaskInitialSetupBadge expiresAt={task.initialSetupExpiresAt} />
                                               {getDiscussionCountForTask(task) > 0 && (
                                                 <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-[10px] px-1.5 py-0 font-semibold shrink-0 flex items-center gap-0.5">
                                                   <MessageSquare size={10} />
@@ -7410,43 +7460,25 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       )}
 
 
-      <Dialog open={openDeleteDialog} onOpenChange={setOpenDeleteDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Task</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm">
-            Delete <span className="font-bold">{taskToDelete?.taskName}</span>?
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpenDeleteDialog(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={confirmDelete}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* SINGLE TASK DELETE DIALOG */}
+      <DeleteConfirmModal
+        open={openDeleteDialog}
+        onOpenChange={setOpenDeleteDialog}
+        title="Delete Task?"
+        itemName={taskToDelete?.taskName}
+        description="Are you sure you want to delete this task? This action cannot be undone."
+        onConfirm={confirmDelete}
+      />
 
-      <Dialog open={openDeleteSubtaskDialog} onOpenChange={setOpenDeleteSubtaskDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Subtask</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm">
-            Delete <span className="font-bold">{subtaskToDelete?.title || "this subtask"}</span>? This can't be undone.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpenDeleteSubtaskDialog(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={confirmDeleteSubtask}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* SUBTASK DELETE DIALOG */}
+      <DeleteConfirmModal
+        open={openDeleteSubtaskDialog}
+        onOpenChange={setOpenDeleteSubtaskDialog}
+        title="Delete Subtask?"
+        itemName={subtaskToDelete?.title || "this subtask"}
+        description="Are you sure you want to delete this subtask? This action cannot be undone."
+        onConfirm={confirmDeleteSubtask}
+      />
 
       {/* MOVE TO COMPLETED DIALOG */}
       <Dialog open={openMoveDialog} onOpenChange={setOpenMoveDialog}>
@@ -7469,24 +7501,13 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       </Dialog>
 
       {/* BULK DELETE CONFIRM DIALOG */}
-      <Dialog open={bulkDeleteConfirmOpen} onOpenChange={setBulkDeleteConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {selectedTaskIds.length} Tasks?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-slate-600">
-            Are you sure you want to delete the selected {selectedTaskIds.length} tasks? This action cannot be undone.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setBulkDeleteConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleBulkDelete}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteConfirmModal
+        open={bulkDeleteConfirmOpen}
+        onOpenChange={setBulkDeleteConfirmOpen}
+        title={`Delete ${selectedTaskIds.length} Tasks?`}
+        description={`Are you sure you want to delete the selected ${selectedTaskIds.length} tasks? This action cannot be undone.`}
+        onConfirm={handleBulkDelete}
+      />
 
       {/* DELAY REASON DIALOG */}
       <Dialog open={delayReasonOpen} onOpenChange={setDelayReasonOpen}>

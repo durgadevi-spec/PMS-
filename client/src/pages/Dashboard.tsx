@@ -40,6 +40,11 @@ import {
   Search,
   Flame,
   Gauge,
+  X,
+  ArrowRight,
+  ArrowUpRight,
+  BarChart2,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
@@ -65,6 +70,8 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/components/Layout";
 import { ProjectTimelineDialog } from "@/components/ProjectTimelineDialog";
+import { DeleteConfirmModal } from "@/components/DeleteConfirmModal";
+import bannerIllustration from "@/assets/banner-illustration.png";
 
 export default function Dashboard() {
   const [projects, setProjects] = useState<any[]>([]);
@@ -488,16 +495,10 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button
-            className="hidden sm:flex font-bold bg-gradient-to-r from-primary to-primary/80 hover:to-primary text-white shadow-lg shadow-primary/25 transition-all hover:scale-105 active:scale-95 border-none"
-            onClick={() => setLocation("/tickets?tab=raise")}
-          >
-            <Ticket className="mr-2 h-4 w-4" /> Raise Ticket
-          </Button>
-
+        <div className="flex items-center gap-2.5">
           <Button
             variant="outline"
+            className="bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border-slate-200 rounded-xl shadow-xs transition-colors font-medium px-4"
             onClick={() => {
               try {
                 // 1️⃣ Summary stats
@@ -567,7 +568,7 @@ export default function Dashboard() {
 
           <Dialog open={newProjectDialog} onOpenChange={setNewProjectDialog}>
             <DialogTrigger asChild>
-              <Button>
+              <Button className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-white font-semibold rounded-xl shadow-sm shadow-blue-900/10 transition-transform active:scale-95 border-none px-4">
                 <Plus className="mr-2 h-4 w-4" /> New Project
               </Button>
             </DialogTrigger>
@@ -686,6 +687,40 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* WELCOME BANNER (Image 2 style with Option 1 Warm Cream + Royal Blue) */}
+      <div className="relative overflow-hidden rounded-2xl bg-[#FEF7DA] border border-[#FDE68A] p-6 sm:p-8 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6 transition-all">
+        {/* Left Text & CTA Section */}
+        <div className="max-w-xl space-y-3 z-10">
+          <h2 className="text-xl sm:text-2xl font-bold text-stone-900 tracking-tight leading-snug">
+            Power your business with Enterprise Project Management
+          </h2>
+          <p className="text-sm text-stone-600 leading-relaxed max-w-lg">
+            Organize projects, track tasks, manage employee workloads, and collaborate seamlessly across departments all in real time.
+          </p>
+          <div className="pt-2">
+            <Button
+              className="group bg-[#1D4ED8] hover:bg-[#1E40AF] text-white font-semibold px-5 py-2.5 rounded-xl shadow-md shadow-blue-900/10 transition-all active:scale-95 flex items-center gap-2.5 border-none cursor-pointer"
+              onClick={() => setLocation("/tickets?tab=raise")}
+            >
+              <Ticket className="h-4 w-4" />
+              <span>Raise Ticket</span>
+              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full border border-white/50 ml-1 transition-transform duration-200 group-hover:translate-x-1">
+                <ArrowRight className="h-3 w-3" />
+              </span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Right Section: Welcome Banner Illustration (Enlarged Scale & Moved Left without Changing Banner Size) */}
+        <div className="w-full md:w-88 lg:w-96 h-44 md:h-48 shrink-0 flex items-center justify-center md:justify-end md:pr-16 lg:pr-28 xl:pr-36 relative select-none">
+          <img
+            src={bannerIllustration}
+            alt="Enterprise Project Management Illustration"
+            className="h-full w-auto max-w-full object-contain scale-[1.38] md:scale-[1.48] origin-center drop-shadow-[0_4px_16px_rgba(0,0,0,0.06)]"
+          />
+        </div>
+      </div>
+
       {/* NEW TICKET NOTIFICATION BANNER */}
       {newTickets.length > 0 && (
         <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border-l-4 border-emerald-500 p-4 rounded-r-lg shadow-sm transition-all duration-300 hover:shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in slide-in-from-top-4 duration-300">
@@ -737,186 +772,262 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* TOP STATS */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      {/* TOP STATS - Semantic Pastel Frosted Quartet (4 Unique Bespoke Patterns) */}
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
 
-        {/* PROJECTS */}
-        <Card className="hover:shadow-lg hover:scale-105 transition-transform transition-shadow">
-          <CardHeader className="flex justify-between pb-2">
-            <CardTitle className="text-sm">Active Projects</CardTitle>
-            <Layers className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
+        {/* 1. ACTIVE PROJECTS (Frosted Lavender Glass + Signature 4-Point Stars) */}
+        <div
+          onClick={() => setLocation("/projects")}
+          className="group relative overflow-hidden bg-gradient-to-br from-[#EAE6FE]/95 via-[#E1D6FD]/90 to-[#D7CBFA]/95 backdrop-blur-md border border-white/80 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(167,139,250,0.18)] hover:shadow-[0_12px_28px_rgba(167,139,250,0.28)] hover:border-white hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex flex-col justify-between min-h-[140px]"
+        >
+          {/* Subtle Glass Refraction Highlight */}
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white to-transparent pointer-events-none" />
 
-          <CardContent className="space-y-3">
-            {/* Main Count */}
-            <div className="flex items-end justify-between">
-              <div className="text-3xl font-bold">{activeProjects.length}</div>
-              <span className="text-xs text-muted-foreground">
-                All time
-              </span>
+          {/* Pattern 1: High-Visibility White 4-Point Sparkle Stars */}
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none select-none transition-transform duration-500 group-hover:scale-105"
+            viewBox="0 0 280 150"
+            fill="none"
+            preserveAspectRatio="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            {/* Primary Large Star in open right area */}
+            <path d="M220 52 Q220 68 236 68 Q220 68 220 84 Q220 68 204 68 Q220 68 220 52 Z" fill="white" fillOpacity="0.85" />
+            {/* Medium Star to the left of the button */}
+            <path d="M185 15 Q185 26 196 26 Q185 26 185 37 Q185 26 174 26 Q185 26 185 15 Z" fill="white" fillOpacity="0.8" />
+            {/* Star in bottom right corner */}
+            <path d="M248 98 Q248 110 260 110 Q248 110 248 122 Q248 110 236 110 Q248 110 248 98 Z" fill="white" fillOpacity="0.75" />
+            {/* Lower-center Star */}
+            <path d="M165 110 Q165 118 173 118 Q165 118 165 126 Q165 118 157 118 Q165 118 165 110 Z" fill="white" fillOpacity="0.65" />
+            {/* Micro Star near upper left */}
+            <path d="M120 15 Q120 20 125 20 Q120 20 120 25 Q120 20 115 20 Q120 20 120 15 Z" fill="white" fillOpacity="0.55" />
+          </svg>
+
+          {/* Content */}
+          <div className="relative z-10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-[#2E1065] tracking-tight">
+              Active Projects
+            </span>
+            <div className="w-8 h-8 rounded-full bg-white/85 backdrop-blur-xs border border-white/80 flex items-center justify-center text-[#4C1D95] shadow-xs group-hover:text-[#1D4ED8] group-hover:bg-white group-hover:border-blue-200 transition-all">
+              <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </div>
+          </div>
 
-            {/* Divider */}
-            <div className="h-px bg-border" />
-
-            {/* Sub info row */}
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>Tracked projects</span>
-              <span>Updated live</span>
+          <div className="relative z-10 my-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-[#1E1B4B]">
+              {activeProjects.length}
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        {/* TASKS */}
-        <Card className="hover:shadow-lg hover:scale-105 transition-transform transition-shadow">
-          <CardHeader className="flex justify-between pb-2">
-            <CardTitle className="text-sm">Task Completion</CardTitle>
-          </CardHeader>
+          <div className="relative z-10 text-xs text-[#581C87]/80 font-medium">
+            Tracked across all departments
+          </div>
+        </div>
 
-          <CardContent className="space-y-2">
-            {tasks.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No tasks yet</p>
-            ) : (
-              <>
-                <p className="text-xs text-muted-foreground">
-                  {completedCount} of {tasks.length} tasks completed
-                </p>
+        {/* 2. TASK COMPLETION (Frosted Mint Green Glass + Concentric Progress Target Rings) */}
+        <div
+          onClick={() => setLocation("/tasks")}
+          className="group relative overflow-hidden bg-gradient-to-br from-[#D1FAE5]/95 via-[#A7F3D0]/85 to-[#6EE7B7]/50 backdrop-blur-md border border-white/80 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(16,185,129,0.16)] hover:shadow-[0_12px_28px_rgba(16,185,129,0.25)] hover:border-white hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex flex-col justify-between min-h-[140px]"
+        >
+          {/* Subtle Glass Refraction Highlight */}
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white to-transparent pointer-events-none" />
 
-                <Progress value={completionPercent} />
+          {/* Pattern 2: Concentric Progress Target Rings & Metric Arc */}
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none select-none transition-transform duration-500 group-hover:scale-105"
+            viewBox="0 0 280 150"
+            fill="none"
+            preserveAspectRatio="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            {/* Outer subtle progress track */}
+            <circle cx="218" cy="72" r="44" stroke="white" strokeWidth="2.5" strokeDasharray="6 6" strokeOpacity="0.65" />
+            {/* Middle solid progress arc */}
+            <circle cx="218" cy="72" r="30" stroke="white" strokeWidth="3.5" strokeDasharray="140 50" strokeLinecap="round" strokeOpacity="0.85" />
+            {/* Inner target ring */}
+            <circle cx="218" cy="72" r="14" fill="white" fillOpacity="0.35" stroke="white" strokeWidth="2" strokeOpacity="0.9" />
+            {/* Center completion dot */}
+            <circle cx="218" cy="72" r="4" fill="white" fillOpacity="0.95" />
+            {/* Upper-left accent ring */}
+            <circle cx="160" cy="28" r="8" stroke="white" strokeWidth="2" strokeDasharray="3 3" strokeOpacity="0.7" />
+          </svg>
 
-                <div className="pt-2 space-y-1">
-                  {pendingTasks.slice(0, 3).map((task) => (
-                    <div
-                      key={task.id}
-                      className="text-xs border-b last:border-none py-1 space-y-0.5"
-                    >
-                      <div className="flex justify-between">
-                        <span className="truncate font-medium">
-                          {task.taskName || task.title}
-                        </span>
-                        <div className="flex gap-1">
-                          {task.taskPeriod && task.taskPeriod !== 'custom' && (
-                            <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200 capitalize">
-                              {task.taskPeriod}
-                            </Badge>
-                          )}
-                          {task.reminderFrequency && (
-                            <Badge variant="outline" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200 capitalize">
-                              {task.reminderFrequency}
-                            </Badge>
-                          )}
-                          <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-700 border-amber-200">
-                            {task.status}
-                          </Badge>
-                        </div>
-                      </div>
-
-                      <div className="text-[10px] text-muted-foreground truncate">
-                        📁 {getProjectName(task.projectId)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* UNASSIGNED TASKS */}
-        <Card className="hover:shadow-lg hover:scale-105 transition-transform transition-shadow">
-          <CardHeader className="flex justify-between pb-2">
-            <CardTitle className="text-sm">Unassigned Tasks</CardTitle>
-            <AlertCircle className="h-4 w-4 text-amber-500" />
-          </CardHeader>
-
-          <CardContent className="space-y-3">
-            {/* Main Count */}
-            <div className="flex items-end justify-between">
-              <div className="text-3xl font-bold text-amber-600">{unassignedCount}</div>
-              <span className="text-xs text-muted-foreground">
-                Need action
-              </span>
+          {/* Content */}
+          <div className="relative z-10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-[#064E3B] tracking-tight">
+              Task Completion
+            </span>
+            <div className="w-8 h-8 rounded-full bg-white/85 backdrop-blur-xs border border-white/80 flex items-center justify-center text-[#047857] shadow-xs group-hover:text-[#1D4ED8] group-hover:bg-white group-hover:border-blue-200 transition-all">
+              <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </div>
+          </div>
 
-            {/* Divider */}
-            <div className="h-px bg-border" />
-
-            {/* Sub info row */}
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>Pending assignment</span>
-              <span>{tasks.length === 0 ? "0" : Math.round((unassignedCount / tasks.length) * 100)}%</span>
+          <div className="relative z-10 my-2 flex items-baseline gap-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-[#064E3B]">
+              {completionPercent}%
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        {/* KEY STEPS */}
-        <Card className="hover:shadow-lg hover:scale-105 transition-transform transition-shadow">
-          <CardHeader className="flex justify-between pb-2">
-            <CardTitle className="text-sm">Key Steps</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold">{activeKeySteps.length}</div>
+          <div className="relative z-10 text-xs text-[#065F46]/80 font-medium">
+            {completedCount} of {tasks.length} tasks completed
+          </div>
+        </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {groupedKeySteps.slice(0, 4).map((group) => (
-                <div key={group.projectId} className="space-y-1">
-                  {/* Project Name */}
-                  <div className="text-xs font-semibold truncate">
-                    📁 {group.projectName}
-                  </div>
+        {/* 3. UNASSIGNED TASKS (Frosted Warm Amber Glass + Task Queue Dot Matrix) */}
+        <div
+          onClick={() => setLocation("/tasks")}
+          className="group relative overflow-hidden bg-gradient-to-br from-[#FEF3C7]/95 via-[#FDE68A]/85 to-[#FCD34D]/50 backdrop-blur-md border border-white/80 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(245,158,11,0.16)] hover:shadow-[0_12px_28px_rgba(245,158,11,0.25)] hover:border-white hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex flex-col justify-between min-h-[140px]"
+        >
+          {/* Subtle Glass Refraction Highlight */}
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white to-transparent pointer-events-none" />
 
-                  {/* Steps under project */}
-                  {group.steps.slice(0, 2).map((ks) => (
-                    <div
-                      key={ks.id}
-                      className="text-[11px] text-muted-foreground truncate pl-3"
-                    >
-                      • {ks.title || ks.stepName}
-                    </div>
-                  ))}
-                </div>
-              ))}
+          {/* Pattern 3: Task Queue Dot Matrix (Staggered Waiting Queue Grid) */}
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none select-none transition-transform duration-500 group-hover:scale-105"
+            viewBox="0 0 280 150"
+            fill="none"
+            preserveAspectRatio="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            {/* Staggered Dot Matrix */}
+            <g fill="white" fillOpacity="0.85">
+              <circle cx="185" cy="45" r="4.5" />
+              <circle cx="205" cy="45" r="4.5" />
+              <circle cx="225" cy="45" r="4.5" />
+              <circle cx="245" cy="45" r="4.5" />
+
+              <circle cx="185" cy="65" r="4.5" fillOpacity="0.7" />
+              <circle cx="205" cy="65" r="5.5" fillOpacity="0.95" />
+              <circle cx="225" cy="65" r="4.5" fillOpacity="0.8" />
+              <circle cx="245" cy="65" r="4.5" fillOpacity="0.7" />
+
+              <circle cx="185" cy="85" r="4.5" fillOpacity="0.6" />
+              <circle cx="205" cy="85" r="4.5" fillOpacity="0.75" />
+              <circle cx="225" cy="85" r="5.5" fillOpacity="0.9" />
+              <circle cx="245" cy="85" r="4.5" fillOpacity="0.65" />
+
+              <circle cx="185" cy="105" r="3.5" fillOpacity="0.5" />
+              <circle cx="205" cy="105" r="4.5" fillOpacity="0.6" />
+              <circle cx="225" cy="105" r="4.5" fillOpacity="0.7" />
+              <circle cx="245" cy="105" r="3.5" fillOpacity="0.5" />
+            </g>
+            {/* Subtle dashed bounding pill */}
+            <rect x="175" y="35" width="80" height="80" rx="14" stroke="white" strokeWidth="1.8" strokeDasharray="4 4" strokeOpacity="0.55" />
+          </svg>
+
+          {/* Content */}
+          <div className="relative z-10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-[#78350F] tracking-tight">
+              Unassigned Tasks
+            </span>
+            <div className="w-8 h-8 rounded-full bg-white/85 backdrop-blur-xs border border-white/80 flex items-center justify-center text-[#B45309] shadow-xs group-hover:text-[#1D4ED8] group-hover:bg-white group-hover:border-blue-200 transition-all">
+              <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        {/* CALENDAR */}
-        <Card className="hover:shadow-lg hover:scale-105 transition-transform transition-shadow">
-          <CardHeader className="flex justify-between pb-2">
-            <CardTitle className="text-sm">Upcoming</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent className="space-y-1">
-            {activeProjects.slice(0, 3).map((p) => (
-              <div key={p.id} className="text-xs">
-                <span className="font-medium">{p.title}</span>
-                <div className="text-muted-foreground">{formatDate(p.endDate)}</div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+          <div className="relative z-10 my-2">
+            <div className={`text-3xl sm:text-4xl font-bold tracking-tight ${unassignedCount > 0 ? "text-amber-800" : "text-[#78350F]"}`}>
+              {unassignedCount}
+            </div>
+          </div>
+
+          <div className="relative z-10 text-xs text-[#92400E]/80 font-medium">
+            {unassignedCount > 0 ? "Requires team assignment" : "All tasks assigned"}
+          </div>
+        </div>
+
+        {/* 4. KEY STEPS (Frosted Ice Blue Glass + Connected Milestone Roadmap Nodes) */}
+        <div
+          onClick={() => setLocation("/key-steps")}
+          className="group relative overflow-hidden bg-gradient-to-br from-[#DBEAFE]/95 via-[#BFDBFE]/85 to-[#93C5FD]/50 backdrop-blur-md border border-white/80 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(59,130,246,0.16)] hover:shadow-[0_12px_28px_rgba(59,130,246,0.25)] hover:border-white hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex flex-col justify-between min-h-[140px]"
+        >
+          {/* Subtle Glass Refraction Highlight */}
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white to-transparent pointer-events-none" />
+
+          {/* Pattern 4: Connected Milestone Roadmap Nodes (Timeline Steps) */}
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none select-none transition-transform duration-500 group-hover:scale-105"
+            viewBox="0 0 280 150"
+            fill="none"
+            preserveAspectRatio="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            {/* Roadmap connecting vectors */}
+            <path d="M165 95 L195 55 L235 85 L258 45" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.8" />
+            <path d="M165 95 L195 55 L235 85 L258 45" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.25" />
+
+            {/* Milestone Nodes */}
+            <circle cx="165" cy="95" r="7" fill="white" fillOpacity="0.9" stroke="white" strokeWidth="2" />
+            <circle cx="165" cy="95" r="3" fill="#1E3A8A" fillOpacity="0.5" />
+
+            <circle cx="195" cy="55" r="8" fill="white" fillOpacity="0.95" stroke="white" strokeWidth="2" />
+            <circle cx="195" cy="55" r="4" fill="#1E3A8A" fillOpacity="0.6" />
+
+            <circle cx="235" cy="85" r="8" fill="white" fillOpacity="0.95" stroke="white" strokeWidth="2" />
+            <circle cx="235" cy="85" r="4" fill="#1E3A8A" fillOpacity="0.6" />
+
+            {/* Target Milestone Pin */}
+            <circle cx="258" cy="45" r="10" fill="white" fillOpacity="1" />
+            <path d="M255 42 L261 45 L255 48 Z" fill="#1E3A8A" />
+          </svg>
+
+          {/* Content */}
+          <div className="relative z-10 flex items-center justify-between">
+            <span className="text-sm font-semibold text-[#1E3A8A] tracking-tight">
+              Key Steps
+            </span>
+            <div className="w-8 h-8 rounded-full bg-white/85 backdrop-blur-xs border border-white/80 flex items-center justify-center text-[#2563EB] shadow-xs group-hover:text-[#1D4ED8] group-hover:bg-white group-hover:border-blue-200 transition-all">
+              <ArrowUpRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+            </div>
+          </div>
+
+          <div className="relative z-10 my-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-[#1E3A8A]">
+              {activeKeySteps.length}
+            </div>
+          </div>
+
+          <div className="relative z-10 text-xs text-[#1D4ED8]/80 font-medium">
+            Active milestone phases across projects
+          </div>
+        </div>
 
       </div>
 
       {/* CURRENT PROJECTS */}
-      <Card className="border shadow-sm overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <div className="flex items-center gap-2">
-            <Briefcase className="h-5 w-5 text-primary" />
-            <CardTitle className="text-lg">Active Projects</CardTitle>
+      <Card className="rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_2px_12px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.02] overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 sm:p-5">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center border border-blue-100 dark:border-blue-900/50 shadow-2xs shrink-0">
+              <Briefcase className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 font-display">Active Projects</CardTitle>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Real-time status, timeline & completion progress</p>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <div className="flex items-center gap-2.5">
+            <div className="relative flex items-center">
+              <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <Input
                 value={projectSearchQuery}
                 onChange={(e) => setProjectSearchQuery(e.target.value)}
                 placeholder="Search projects..."
-                className="h-8 w-52 pl-8 text-xs"
+                className="h-8.5 w-44 sm:w-52 pl-9 pr-8 text-xs rounded-xl border-slate-200/90 bg-slate-50/70 placeholder:text-slate-400 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:w-64 sm:focus:w-80 transition-all duration-300 ease-out shadow-2xs font-medium"
               />
+              {projectSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setProjectSearchQuery("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-full hover:bg-slate-200/60 transition-colors"
+                  title="Clear search"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
             </div>
-            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 uppercase font-black text-[10px] whitespace-nowrap">
+            <Badge variant="outline" className="bg-blue-50/90 text-blue-700 border-blue-200/80 uppercase font-bold text-[10px] tracking-wider px-2.5 py-1 rounded-lg whitespace-nowrap shadow-2xs shrink-0">
               {projectSearchQuery.trim()
                 ? `${filteredActiveProjects.length} of ${activeProjects.length} Live Projects`
                 : `${activeProjects.length} Live Projects`}
@@ -924,53 +1035,70 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="border-t">
+        <div className="border-t border-slate-100 dark:border-slate-800">
           {activeProjects.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground font-bold">
+            <div className="p-8 text-center text-slate-500 font-medium">
               No live projects found
             </div>
           ) : filteredActiveProjects.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground font-bold">
+            <div className="p-8 text-center text-slate-500 font-medium">
               No projects match "{projectSearchQuery}"
             </div>
           ) : (
             <div className="max-h-[420px] overflow-y-auto">
               <table className="w-full text-left">
-                <thead className="bg-muted/50 border-b sticky top-0 z-10">
+                <thead className="bg-slate-50/80 dark:bg-slate-850/80 border-b border-slate-100 dark:border-slate-800 sticky top-0 z-10 backdrop-blur-xs">
                   <tr>
-                    <th className="px-6 py-3 text-xs font-bold">Name</th>
-                    <th className="px-6 py-3 text-xs font-bold">Status</th>
-                    <th className="px-6 py-3 text-xs font-bold">Dates</th>
-                    <th className="px-6 py-3 text-xs font-bold">Progress</th>
-                    <th className="px-6 py-3 text-xs font-bold text-right">Actions</th>
+                    <th className="px-6 py-3.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Name</th>
+                    <th className="px-6 py-3.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Dates</th>
+                    <th className="px-6 py-3.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Progress</th>
+                    <th className="px-6 py-3.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {filteredActiveProjects.map((project) => (
-                    <tr key={project.id} className="hover:bg-muted/30">
-                      <td className="px-6 py-4 font-semibold text-sm">
+                    <tr key={project.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors group">
+                      <td className="px-6 py-4 font-semibold text-sm text-slate-900 dark:text-slate-100">
                         {project.title}
                       </td>
                       <td className="px-6 py-4">
-                        <Badge variant="outline" className={`text-[10px] font-black uppercase px-2 py-0.5 ${String(project.status).toLowerCase() === 'not started' ? 'bg-slate-100 text-slate-600 border-slate-200' :
+                        <Badge variant="outline" className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-md ${
+                          String(project.status).toLowerCase() === 'not started' ? 'bg-slate-100 text-slate-600 border-slate-200' :
                           String(project.status).toLowerCase() === 'in-progress' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                            'bg-green-50 text-green-700 border-green-200'
-                          }`}>
+                            'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}>
                           {project.status || 'Open'}
                         </Badge>
                       </td>
-                      <td className="px-6 py-4 text-xs text-muted-foreground">
+                      <td className="px-6 py-4 text-xs font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
                         {formatDate(project.startDate)} — {formatDate(project.endDate)}
                       </td>
-                      <td className="px-6 py-4 font-bold text-primary">
-                        {project.progress || 0}%
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-20 sm:w-24 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden shadow-inner shrink-0">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                (project.progress || 0) >= 75
+                                  ? 'bg-emerald-500'
+                                  : (project.progress || 0) >= 40
+                                  ? 'bg-blue-500'
+                                  : 'bg-amber-500'
+                              }`}
+                              style={{ width: `${Math.min(100, Math.max(0, project.progress || 0))}%` }}
+                            />
+                          </div>
+                          <span className="font-bold text-xs tabular-nums text-slate-800 dark:text-slate-200">
+                            {project.progress || 0}%
+                          </span>
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="flex items-center justify-end gap-1.5">
                           <Button
                             variant="outline"
                             size="icon"
-                            className="h-8 w-8 border-slate-200 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700"
+                            className="h-8 w-8 rounded-lg border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-all shadow-2xs"
                             onClick={(e) => {
                               e.stopPropagation();
                               setTimelineProject(project);
@@ -983,11 +1111,12 @@ export default function Dashboard() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            className="h-8 w-8 rounded-lg text-slate-400 hover:text-destructive hover:bg-destructive/10 transition-colors"
                             onClick={() => {
                               setProjectToDelete(project);
                               setDeleteDialogOpen(true);
                             }}
+                            title="Delete Project"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -1003,44 +1132,58 @@ export default function Dashboard() {
       </Card>
 
       {/* ANALYTICS */}
-      <Card>
+      <Card className="rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_2px_12px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.02] overflow-hidden">
         <CardHeader
-          className="pb-3 cursor-pointer flex justify-between"
+          className="p-4 sm:p-5 cursor-pointer flex flex-row items-center justify-between"
           onClick={() => toggleSection("analytics")}
         >
-          <div>
-            <CardTitle>Analytics</CardTitle>
-            <CardDescription>Performance overview</CardDescription>
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center border border-purple-100 dark:border-purple-900/50 shadow-2xs shrink-0">
+              <BarChart2 className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 font-display">Analytics</CardTitle>
+              <CardDescription className="text-xs text-slate-500 dark:text-slate-400 font-medium">Performance overview across tasks & milestones</CardDescription>
+            </div>
           </div>
-          <ChevronDown
-            className={`h-5 w-5 transition-transform ${expandedSections.analytics ? "" : "-rotate-90"
+          <div className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            <ChevronDown
+              className={`h-5 w-5 transition-transform duration-200 ${
+                expandedSections.analytics ? "" : "-rotate-90"
               }`}
-          />
+            />
+          </div>
         </CardHeader>
 
         {expandedSections.analytics && (
-          <CardContent>
-            <div className="grid gap-4 md:grid-cols-2">
+          <CardContent className="p-4 sm:p-5 pt-0">
+            <div className="grid gap-5 md:grid-cols-2">
               {/* BAR CHART: Tasks per Project */}
-              <div className="flex flex-col items-center w-full">
-                <h3 className="text-sm font-semibold mb-2">Tasks</h3>
+              <div className="flex flex-col items-center w-full rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/40 p-4 shadow-2xs">
+                <div className="w-full flex items-center justify-between mb-3 px-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Tasks per Project</h3>
+                  <span className="text-[11px] font-medium text-slate-400">Pending vs Completed</span>
+                </div>
 
                 <ResponsiveContainer width="100%" height={260}>
                   <BarChart data={barData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" />
-                    <YAxis />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
                     <Tooltip />
-                    <Legend />
-                    <Bar dataKey="pending" stackId="a" fill="hsl(var(--chart-1))" name="Pending Tasks" />
-                    <Bar dataKey="completed" stackId="a" fill="hsl(var(--chart-2))" name="Completed Tasks" />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="pending" stackId="a" fill="hsl(var(--chart-1))" name="Pending Tasks" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="completed" stackId="a" fill="hsl(var(--chart-2))" name="Completed Tasks" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
 
               {/* PIE CHART: Key Steps Completion */}
-              <div className="flex flex-col items-center w-full">
-                <h3 className="text-sm font-semibold mb-2">Key Steps</h3>
+              <div className="flex flex-col items-center w-full rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/40 p-4 shadow-2xs">
+                <div className="w-full flex items-center justify-between mb-3 px-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Key Steps Completion</h3>
+                  <span className="text-[11px] font-medium text-slate-400">Overall Milestone Health</span>
+                </div>
 
                 <ResponsiveContainer width="100%" height={260}>
                   <PieChart>
@@ -1048,7 +1191,7 @@ export default function Dashboard() {
                       data={pieData}
                       cx="50%"
                       cy="50%"
-                      outerRadius={90}
+                      outerRadius={85}
                       dataKey="value"
                       label={({ name, value }) => {
                         const percent =
@@ -1089,17 +1232,24 @@ export default function Dashboard() {
       </Card>
 
       {/* MORE COLORFUL INSIGHTS (Zoho-style widgets) */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Insights</CardTitle>
-          <CardDescription>A closer look at status, priority & overall health</CardDescription>
+      <Card className="rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-[0_2px_12px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.02] overflow-hidden">
+        <CardHeader className="p-4 sm:p-5">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center border border-emerald-100 dark:border-emerald-900/50 shadow-2xs shrink-0">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 font-display">Insights</CardTitle>
+              <CardDescription className="text-xs text-slate-500 dark:text-slate-400 font-medium">A closer look at status, priority & overall health</CardDescription>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-4 sm:p-5 pt-0">
           <div className="grid gap-4 md:grid-cols-3">
             {/* DONUT: Projects by Status */}
-            <div className="flex flex-col items-center w-full rounded-xl border bg-gradient-to-b from-muted/30 to-transparent p-3">
-              <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                <Layers className="h-3.5 w-3.5 text-primary" /> Projects by Status
+            <div className="flex flex-col items-center w-full rounded-xl border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-slate-50/80 to-transparent p-4 shadow-2xs">
+              <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                <Layers className="h-4 w-4 text-blue-500" /> Projects by Status
               </h3>
               {projectStatusData.length === 0 ? (
                 <div className="h-[220px] flex items-center justify-center text-xs text-muted-foreground">
@@ -1134,9 +1284,9 @@ export default function Dashboard() {
             </div>
 
             {/* DONUT: Tasks by Priority */}
-            <div className="flex flex-col items-center w-full rounded-xl border bg-gradient-to-b from-muted/30 to-transparent p-3">
-              <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                <Flame className="h-3.5 w-3.5 text-orange-500" /> Tasks by Priority
+            <div className="flex flex-col items-center w-full rounded-xl border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-slate-50/80 to-transparent p-4 shadow-2xs">
+              <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                <Flame className="h-4 w-4 text-orange-500" /> Tasks by Priority
               </h3>
               {taskPriorityData.length === 0 ? (
                 <div className="h-[220px] flex items-center justify-center text-xs text-muted-foreground">
@@ -1171,9 +1321,9 @@ export default function Dashboard() {
             </div>
 
             {/* RADIAL GAUGE: Overall Completion */}
-            <div className="flex flex-col items-center w-full rounded-xl border bg-gradient-to-b from-muted/30 to-transparent p-3">
-              <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                <Gauge className="h-3.5 w-3.5" style={{ color: gaugeColor }} /> Overall Completion
+            <div className="flex flex-col items-center w-full rounded-xl border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-slate-50/80 to-transparent p-4 shadow-2xs">
+              <h3 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                <Gauge className="h-4 w-4" style={{ color: gaugeColor }} /> Overall Completion
               </h3>
               <ResponsiveContainer width="100%" height={220}>
                 <RadialBarChart
@@ -1197,7 +1347,7 @@ export default function Dashboard() {
                   </text>
                 </RadialBarChart>
               </ResponsiveContainer>
-              <p className="text-xs text-muted-foreground -mt-2">
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 -mt-2">
                 {completedCount} of {tasks.length} tasks completed
               </p>
             </div>
@@ -1206,37 +1356,18 @@ export default function Dashboard() {
       </Card>
 
       {/* DELETE CONFIRMATION DIALOG */}
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Project</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete this project? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          {projectToDelete && (
-            <p className="text-sm">
-              Project: <span className="font-bold">{projectToDelete.title}</span>
-            </p>
-          )}
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setDeleteDialogOpen(false);
-                setProjectToDelete(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleDeleteProject}>
-              Delete Project
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteConfirmModal
+        open={deleteDialogOpen}
+        onOpenChange={(o) => {
+          setDeleteDialogOpen(o);
+          if (!o) setProjectToDelete(null);
+        }}
+        title="Delete Project?"
+        itemName={projectToDelete?.title}
+        description="Are you sure you want to delete this project? All associated tasks, timeline records, and data will be permanently removed. This action cannot be undone."
+        onConfirm={handleDeleteProject}
+        confirmText="Delete Project"
+      />
 
       {/* PROJECT TIMELINE & GANTT CHART DIALOG (same component & behavior as the Projects page) */}
       <ProjectTimelineDialog

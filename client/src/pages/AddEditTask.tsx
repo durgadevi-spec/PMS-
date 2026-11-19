@@ -34,6 +34,8 @@ import TaskScheduleHistoryDialog from "@/components/TaskScheduleHistoryDialog";
 import SessionTasksPanel from "@/components/SessionTasksPanel";
 import DateField from "@/components/DateField";
 import { useScheduleChangeReason, scheduleFieldsChanged } from "@/components/ScheduleChangeReasonDialog";
+import { TaskInitialSetupNotice } from "@/components/TaskInitialSetupIndicator";
+import { isTaskInInitialSetup } from "@shared/taskInitialSetup";
 import { useFreeze } from "@/context/FreezeContext";
 
 export default function AddEditTask() {
@@ -52,6 +54,7 @@ export default function AddEditTask() {
   const [subtasks, setSubtasks] = useState<any[]>([]);
   // Task Dependency & Automatic Schedule Management (new feature)
   const [originalSchedule, setOriginalSchedule] = useState<{ startDate: string; endDate: string } | null>(null);
+  const [initialSetupExpiresAt, setInitialSetupExpiresAt] = useState<string | null>(null);
   const [sameProjectTasks, setSameProjectTasks] = useState<{ id: string; taskName: string; keyStepId: string | null }[]>([]);
   const { requestReason, ReasonDialog } = useScheduleChangeReason();
   const [loading, setLoading] = useState(false);
@@ -101,7 +104,7 @@ export default function AddEditTask() {
   // can keep adding tasks without leaving the page, then review/edit/reopen
   // any of them from that list.
   const [sessionTasks, setSessionTasks] = useState<
-    Array<{ id: string; form: typeof form; subtasks: any[]; savedAt: string }>
+    Array<{ id: string; form: typeof form; subtasks: any[]; savedAt: string; initialSetupExpiresAt: string | null }>
   >([]);
   const [sessionPanelCollapsed, setSessionPanelCollapsed] = useState(false);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
@@ -406,6 +409,7 @@ export default function AddEditTask() {
         // schedule as it was when the page loaded, so we can tell whether
         // the user is about to manually change it and needs to be asked why.
         setOriginalSchedule({ startDate: task.startDate || "", endDate: task.endDate || "" });
+        setInitialSetupExpiresAt(task.initialSetupExpiresAt || task.initial_setup_expires_at || null);
         setTaskPeriod(task.taskPeriod || "custom");
         setSubtasks(
           Array.isArray(task.subtasks)
@@ -669,6 +673,7 @@ export default function AddEditTask() {
     }));
     setSubtasks([]);
     setOriginalSchedule(null);
+    setInitialSetupExpiresAt(null);
     setEditingSessionId(null);
     focusEditForm();
   };
@@ -704,6 +709,20 @@ export default function AddEditTask() {
     // loaded into the form (if the user clicked "Edit" on one from the
     // list), otherwise none (a brand-new task not yet saved).
     const effectiveTaskId = taskId || editingSessionId;
+    if (!effectiveTaskId && form.startDate && form.endDate) {
+      const duration = Math.round(
+        (new Date(`${form.endDate}T00:00:00Z`).getTime() -
+          new Date(`${form.startDate}T00:00:00Z`).getTime()) / 86400000
+      );
+      if (duration < 0 || duration > 7) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: "A new task's timeline cannot exceed 7 days.",
+        });
+        return;
+      }
+    }
 
     setLoading(true);
 
@@ -712,9 +731,12 @@ export default function AddEditTask() {
       // existing task and the Start/End Date actually changed, a reason is
       // mandatory before we save.
       let scheduleReasonPayload: { reason: string; reasonCategory: string } | null = null;
-      if (taskId && originalSchedule && scheduleFieldsChanged(originalSchedule, form)) {
+      if (effectiveTaskId && originalSchedule && scheduleFieldsChanged(originalSchedule, form) &&
+        !isTaskInInitialSetup(initialSetupExpiresAt)) {
         try {
-          const result = await requestReason();
+          const today = new Date().toISOString().slice(0, 10);
+          const overdue = Boolean(originalSchedule.endDate && originalSchedule.endDate < today);
+          const result = await requestReason({ requireExplanation: overdue });
           scheduleReasonPayload = { reason: result.reason, reasonCategory: result.reasonCategory };
         } catch {
           // User cancelled the reason prompt — abort the save entirely.
@@ -755,7 +777,16 @@ export default function AddEditTask() {
 
       const result = await response.json();
       console.log("Task saved:", result);
+      const savedInitialSetupExpiresAt = result.initialSetupExpiresAt || initialSetupExpiresAt;
+      if (savedInitialSetupExpiresAt) setInitialSetupExpiresAt(savedInitialSetupExpiresAt);
       const savedId = effectiveTaskId ? String(effectiveTaskId) : String(result.id);
+      const savedForm = result.dateChangeApprovalPending
+        ? { ...form, startDate: result.startDate || "", endDate: result.endDate || "" }
+        : form;
+      if (result.dateChangeApprovalPending) {
+        setForm(savedForm);
+        setOriginalSchedule({ startDate: savedForm.startDate, endDate: savedForm.endDate });
+      }
 
       // Notify Tasks.tsx (and any other listeners) that this task changed
       window.dispatchEvent(new CustomEvent('task.edited', {
@@ -764,7 +795,9 @@ export default function AddEditTask() {
 
       toast({
         title: effectiveTaskId ? "Updated" : "Created",
-        description: `Task "${form.taskName}" ${effectiveTaskId ? "updated" : "created"} successfully!`,
+        description: result.dateChangeApprovalPending
+          ? `The date change for "${form.taskName}" was sent for admin approval; the current dates remain in place.`
+          : `Task "${form.taskName}" ${effectiveTaskId ? "updated" : "created"} successfully!`,
       });
 
       // Full "Edit Task" route (existing task reached via /tasks/:id/edit) —
@@ -777,7 +810,13 @@ export default function AddEditTask() {
       // Add-Task flow: keep a running list of every task saved this visit,
       // so the user can see, edit, and add more without leaving the page.
       const nowLabel = new Date().toLocaleTimeString();
-      const snapshot = { id: savedId, form: { ...form }, subtasks: [...subtasks], savedAt: nowLabel };
+      const snapshot = {
+        id: savedId,
+        form: { ...savedForm },
+        subtasks: [...subtasks],
+        savedAt: nowLabel,
+        initialSetupExpiresAt: savedInitialSetupExpiresAt || null,
+      };
       setSessionTasks((prev) => {
         const idx = prev.findIndex((t) => t.id === savedId);
         if (idx >= 0) {
@@ -812,6 +851,8 @@ export default function AddEditTask() {
     if (!entry) return;
     setForm({ ...entry.form });
     setSubtasks([...entry.subtasks]);
+    setOriginalSchedule({ startDate: entry.form.startDate || "", endDate: entry.form.endDate || "" });
+    setInitialSetupExpiresAt(entry.initialSetupExpiresAt);
     setEditingSessionId(id);
     setExpandedSessionId(null);
     focusEditForm();
@@ -888,6 +929,8 @@ export default function AddEditTask() {
               </div>
             )}
           </div>
+
+          {(taskId || editingSessionId) && <TaskInitialSetupNotice expiresAt={initialSetupExpiresAt} />}
 
           {/* Form */}
           <div className="bg-white rounded-lg border p-8 space-y-6">
@@ -1244,11 +1287,15 @@ export default function AddEditTask() {
                       <SelectItem value="custom">Custom</SelectItem>
                       <SelectItem value="today">Today</SelectItem>
                       <SelectItem value="1 week">1 Week</SelectItem>
-                      <SelectItem value="fortnight">Fortnight (15 Days)</SelectItem>
-                      <SelectItem value="1 month">1 Month</SelectItem>
-                      <SelectItem value="quarterly">Quarterly</SelectItem>
-                      <SelectItem value="half yearly">Half Yearly</SelectItem>
-                      <SelectItem value="annual">Annual</SelectItem>
+                      {(taskId || editingSessionId) && (
+                        <>
+                          <SelectItem value="fortnight">Fortnight (15 Days)</SelectItem>
+                          <SelectItem value="1 month">1 Month</SelectItem>
+                          <SelectItem value="quarterly">Quarterly</SelectItem>
+                          <SelectItem value="half yearly">Half Yearly</SelectItem>
+                          <SelectItem value="annual">Annual</SelectItem>
+                        </>
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -1332,6 +1379,13 @@ export default function AddEditTask() {
                 <DateField
                   value={form.endDate}
                   min={form.startDate || undefined}
+                  max={!taskId && !editingSessionId && form.startDate
+                    ? (() => {
+                      const maxDate = new Date(`${form.startDate}T00:00:00Z`);
+                      maxDate.setUTCDate(maxDate.getUTCDate() + 7);
+                      return maxDate.toISOString().slice(0, 10);
+                    })()
+                    : undefined}
                   onChange={(newEndDate) => {
                     setTaskPeriod("custom");
                     setForm((f) => ({

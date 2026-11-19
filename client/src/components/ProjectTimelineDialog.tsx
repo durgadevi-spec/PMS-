@@ -27,6 +27,9 @@ import {
     LayoutGrid,
     CalendarRange,
     Target,
+    Briefcase,
+    FileText,
+    CheckSquare,
 } from "lucide-react";
 import { apiFetch } from "@/lib/apiClient";
 import { cn } from "@/lib/utils";
@@ -280,17 +283,20 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
             nestedSteps.forEach((child: any) => pushKeyStep(child, depth + 1));
         };
 
-        topKeySteps.forEach((ks: any) => pushKeyStep(ks, 1));
+        // Only render children if project row is not collapsed
+        if (!collapsed[`project-${project.id}`]) {
+            topKeySteps.forEach((ks: any) => pushKeyStep(ks, 1));
 
-        // Unassigned (no key step) tasks, grouped directly under project
-        unassignedTasks.sort(sortByStart).forEach((t: any) => {
-            const taskRow = buildTaskRow(t, `project-${project.id}`, 1);
-            out.push(taskRow);
-            if (collapsed[taskRow.id]) return;
-            (t.subtasks || []).slice().sort(sortByStart).forEach((st: any) => {
-                out.push(buildSubtaskRow(st, taskRow.id, 2));
+            // Unassigned (no key step) tasks, grouped directly under project
+            unassignedTasks.sort(sortByStart).forEach((t: any) => {
+                const taskRow = buildTaskRow(t, `project-${project.id}`, 1);
+                out.push(taskRow);
+                if (collapsed[taskRow.id]) return;
+                (t.subtasks || []).slice().sort(sortByStart).forEach((st: any) => {
+                    out.push(buildSubtaskRow(st, taskRow.id, 2));
+                });
             });
-        });
+        }
 
         // Compute overall date bounds for the Gantt scale
         const allDates: Date[] = [];
@@ -322,6 +328,54 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
             return true;
         });
     }, [rows, typeFilter, search]);
+
+    const HIERARCHY_PANEL_WIDTH = 440;
+
+    // Build tree connection meta for each row (vertical trunk lines and L/T branch terminals)
+    const rowTreeMeta = useMemo(() => {
+        const metaMap = new Map<string, { ancestorLines: boolean[]; isLastChild: boolean }>();
+
+        for (let i = 0; i < filteredRows.length; i++) {
+            const row = filteredRows[i];
+            if (row.depth === 0) {
+                metaMap.set(row.id, { ancestorLines: [], isLastChild: true });
+                continue;
+            }
+
+            // Check if this row is the last visible child among siblings with the same parentId
+            let isLast = true;
+            for (let j = i + 1; j < filteredRows.length; j++) {
+                if (filteredRows[j].parentId === row.parentId) {
+                    isLast = false;
+                    break;
+                }
+                if (filteredRows[j].depth < row.depth) {
+                    break;
+                }
+            }
+
+            // For each ancestor level k from 0 to row.depth - 2:
+            // Check if there are further nodes after row i at depth k + 1
+            const ancestorLines: boolean[] = [];
+            for (let k = 0; k < row.depth - 1; k++) {
+                let hasMore = false;
+                for (let j = i + 1; j < filteredRows.length; j++) {
+                    if (filteredRows[j].depth === k + 1) {
+                        hasMore = true;
+                        break;
+                    }
+                    if (filteredRows[j].depth <= k) {
+                        break;
+                    }
+                }
+                ancestorLines.push(hasMore);
+            }
+
+            metaMap.set(row.id, { ancestorLines, isLastChild: isLast });
+        }
+
+        return metaMap;
+    }, [filteredRows]);
 
     const totalSpanDays = Math.max(1, dayDiff(maxDate, minDate));
     const today = toDateOnly(new Date())!;
@@ -575,10 +629,13 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
                         {/* ================= GANTT VIEW ================= */}
                         {viewMode === "gantt" && (
                             <div ref={ganttScrollRef} className="flex-1 overflow-auto relative">
-                                <div style={{ width: 420 + timelineWidthPx }} className="relative min-w-full">
+                                <div style={{ width: HIERARCHY_PANEL_WIDTH + timelineWidthPx }} className="relative min-w-full">
                                     {/* Header: hierarchy label + month scale + day scale */}
                                     <div className="flex sticky top-0 z-20 bg-background border-b border-muted/40">
-                                        <div className="w-[420px] shrink-0 sticky left-0 z-30 bg-background px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-r border-muted/30 flex items-end pb-1.5 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.18)]">
+                                        <div
+                                            className="shrink-0 sticky left-0 z-30 bg-background px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-r border-muted/30 flex items-end pb-1.5 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.18)]"
+                                            style={{ width: HIERARCHY_PANEL_WIDTH }}
+                                        >
                                             Hierarchy & Details
                                         </div>
                                         <div className="shrink-0 relative" style={{ width: timelineWidthPx }}>
@@ -624,7 +681,7 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
                                     <div className="relative">
                                         {/* Weekend shading, spanning the full body height */}
                                         {weekendBands.length > 0 && (
-                                            <div className="absolute top-0 bottom-0 pointer-events-none z-0" style={{ left: 420, width: timelineWidthPx }}>
+                                            <div className="absolute top-0 bottom-0 pointer-events-none z-0" style={{ left: HIERARCHY_PANEL_WIDTH, width: timelineWidthPx }}>
                                                 {weekendBands.map((b, i) => (
                                                     <div key={i} className="absolute top-0 bottom-0 bg-muted/10" style={{ left: b.left, width: pxPerDay }} />
                                                 ))}
@@ -633,7 +690,7 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
                                         {/* Today marker, spanning the full body height */}
                                         <div
                                             className="absolute top-0 bottom-0 border-l-2 border-rose-500/70 z-[5] pointer-events-none"
-                                            style={{ left: 420 + todayPx }}
+                                            style={{ left: HIERARCHY_PANEL_WIDTH + todayPx }}
                                         />
 
                                         {filteredRows.map((row) => {
@@ -646,50 +703,167 @@ export function ProjectTimelineDialog({ open, onOpenChange, project, employees }
                                             const isMilestone = !!(start && end && dayDiff(end, start) === 0);
                                             const plannedDuration = start && end ? dayDiff(end, start) + 1 : null;
                                             const bg = rowBg(row.level);
+                                            const treeMeta = rowTreeMeta.get(row.id) || { ancestorLines: [], isLastChild: false };
 
                                             return (
                                                 <div key={row.id} className="flex border-b border-muted/15 group isolate">
                                                     {/* Left: hierarchy + details */}
                                                     <div
-                                                        className={cn("w-[420px] shrink-0 sticky left-0 z-20 px-3 py-2 border-r border-muted/30 flex flex-col gap-1 group-hover:brightness-95 transition-[filter] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.18)]", bg)}
-                                                        style={{ paddingLeft: `${12 + row.depth * 18}px` }}
+                                                        className={cn(
+                                                            "shrink-0 sticky left-0 z-20 px-2.5 py-1.5 border-r border-muted/30 flex items-stretch group-hover:brightness-95 transition-[filter] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.18)]",
+                                                            bg
+                                                        )}
+                                                        style={{ width: HIERARCHY_PANEL_WIDTH }}
                                                     >
-                                                        <div className="flex items-center gap-1.5">
-                                                            {row.hasChildren ? (
-                                                                <button onClick={() => toggleCollapse(row.id)} className="shrink-0 text-muted-foreground hover:text-foreground">
-                                                                    {collapsed[row.id] ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                                                                </button>
-                                                            ) : (
-                                                                <span className="w-3.5 shrink-0" />
-                                                            )}
-                                                            <Badge variant="outline" className="text-[8px] px-1 py-0 h-4 uppercase shrink-0 font-bold tracking-wide">
-                                                                {levelLabel(row.level)}
-                                                            </Badge>
-                                                            <span className={cn("text-xs truncate", row.level === "project" ? "font-bold" : row.level === "keystep" ? "font-semibold" : "font-medium")} title={row.title}>
-                                                                {row.title}
-                                                            </span>
-                                                            {isMilestone && <span title="Checkpoint" className="inline-flex shrink-0"><Flag className="h-3 w-3 text-amber-500" /></span>}
-                                                        </div>
+                                                        {/* Case 1: Root Project Row */}
+                                                        {row.level === "project" ? (
+                                                            <div className="w-full flex items-center justify-between gap-2 p-2 rounded-xl bg-indigo-50/90 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 shadow-[0_2px_8px_rgba(99,102,241,0.12)]">
+                                                                <div className="flex items-center gap-2 min-w-0">
+                                                                    <button
+                                                                        onClick={() => toggleCollapse(row.id)}
+                                                                        className="w-5 h-5 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900/60 flex items-center justify-center text-indigo-700 dark:text-indigo-300 transition-colors shrink-0"
+                                                                        title={collapsed[row.id] ? "Expand project" : "Collapse project"}
+                                                                    >
+                                                                        {collapsed[row.id] ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                                                    </button>
+                                                                    <div className="w-6 h-6 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                                                                        <Briefcase className="h-3.5 w-3.5" />
+                                                                    </div>
+                                                                    <div className="flex items-center gap-1.5 min-w-0">
+                                                                        <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-400 bg-indigo-100/90 dark:bg-indigo-900/60 px-1.5 py-0.5 rounded shrink-0">
+                                                                            PROJECT
+                                                                        </span>
+                                                                        <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate" title={row.title}>
+                                                                            {row.title}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                                <Badge variant="outline" className="text-[8px] px-1.5 py-0.5 border-indigo-200 text-indigo-700 font-semibold shrink-0">
+                                                                    {row.status}
+                                                                </Badge>
+                                                            </div>
+                                                        ) : (
+                                                            /* Nested Rows (Tasks, Key Steps, Subtasks) with Tree Connector Lines */
+                                                            <div className="w-full flex items-stretch">
+                                                                {/* Tree Guide Columns */}
+                                                                <div className="flex shrink-0 self-stretch select-none">
+                                                                    {/* Ancestor Vertical Trunk Lines */}
+                                                                    {treeMeta.ancestorLines.map((hasLine, colIdx) => (
+                                                                        <div key={colIdx} className="w-4 sm:w-5 relative self-stretch">
+                                                                            {hasLine && (
+                                                                                <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[1.5px] bg-slate-300 dark:bg-slate-600" />
+                                                                            )}
+                                                                        </div>
+                                                                    ))}
 
-                                                        {row.level !== "project" && (
-                                                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground pl-5">
-                                                                <span className="flex items-center gap-1"><CalendarIcon className="h-2.5 w-2.5" /> {fmt(row.startDate)} → {fmt(row.endDate)}</span>
-                                                                {plannedDuration !== null && <span className="flex items-center gap-1"><Clock className="h-2.5 w-2.5" /> {plannedDuration}d planned</span>}
-                                                                {row.isCompleted && (
-                                                                    <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-2.5 w-2.5" /> Done {fmt(row.actualCompletionDate)}</span>
+                                                                    {/* Active Depth Connecting Branch (├── or └──) */}
+                                                                    <div className="w-4 sm:w-5 relative self-stretch">
+                                                                        {treeMeta.isLastChild ? (
+                                                                            <>
+                                                                                {/* L-Branch (└──) with curved corner */}
+                                                                                <div className="absolute top-0 h-4 left-1/2 -translate-x-1/2 w-[1.5px] bg-slate-300 dark:bg-slate-600" />
+                                                                                <div className="absolute top-0 h-4 left-1/2 right-0 border-b-[1.5px] border-l-[1.5px] border-slate-300 dark:border-slate-600 rounded-bl-[4px]" />
+                                                                            </>
+                                                                        ) : (
+                                                                            <>
+                                                                                {/* T-Branch (├──) with continuing vertical guide */}
+                                                                                <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[1.5px] bg-slate-300 dark:bg-slate-600" />
+                                                                                <div className="absolute top-4 left-1/2 right-0 h-[1.5px] bg-slate-300 dark:bg-slate-600" />
+                                                                            </>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* Content: Elevated Parent Card OR Subtask Branch Row */}
+                                                                {row.hasChildren ? (
+                                                                    /* Parent Card: Enhanced Depth and Shadow as requested */
+                                                                    <div
+                                                                        className={cn(
+                                                                            "flex-1 min-w-0 rounded-xl transition-all duration-200 border",
+                                                                            !collapsed[row.id]
+                                                                                ? "bg-white dark:bg-slate-800/95 border-slate-300/90 dark:border-slate-600 shadow-[0_3px_12px_rgba(0,0,0,0.08),0_1px_3px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.03] p-2 my-0.5"
+                                                                                : "bg-white/85 dark:bg-slate-850 border-slate-200 dark:border-slate-700 shadow-[0_1px_4px_rgba(0,0,0,0.04)] hover:shadow-md p-2 my-0.5"
+                                                                        )}
+                                                                    >
+                                                                        <div className="flex items-center gap-1.5 min-w-0">
+                                                                            <button
+                                                                                onClick={() => toggleCollapse(row.id)}
+                                                                                className="w-4 h-4 rounded hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-slate-500 hover:text-slate-900 transition-colors shrink-0"
+                                                                                title={collapsed[row.id] ? "Expand" : "Collapse"}
+                                                                            >
+                                                                                {collapsed[row.id] ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                                                            </button>
+                                                                            <div className="w-5 h-5 rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                                                                                <CheckSquare className="h-3 w-3" />
+                                                                            </div>
+                                                                            <span className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 shrink-0">
+                                                                                {levelLabel(row.level)}
+                                                                            </span>
+                                                                            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate" title={row.title}>
+                                                                                {row.title}
+                                                                            </span>
+                                                                            {isMilestone && <span title="Checkpoint" className="inline-flex shrink-0"><Flag className="h-3 w-3 text-amber-500" /></span>}
+                                                                        </div>
+
+                                                                        {/* Metadata */}
+                                                                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] text-muted-foreground mt-1 pl-6">
+                                                                            <span className="flex items-center gap-1"><CalendarIcon className="h-2.5 w-2.5" /> {fmt(row.startDate)} → {fmt(row.endDate)}</span>
+                                                                            {plannedDuration !== null && <span className="flex items-center gap-1"><Clock className="h-2.5 w-2.5" /> {plannedDuration}d planned</span>}
+                                                                            {row.isCompleted && (
+                                                                                <span className="flex items-center gap-1 text-emerald-600 font-medium"><CheckCircle2 className="h-2.5 w-2.5" /> Done {fmt(row.actualCompletionDate)}</span>
+                                                                            )}
+                                                                            {delayed && (
+                                                                                <span className="flex items-center gap-1 text-red-600 font-bold bg-red-50 dark:bg-red-950/40 px-1 py-0.2 rounded border border-red-200/60"><AlertTriangle className="h-2.5 w-2.5" /> {delayDays}d delayed</span>
+                                                                            )}
+                                                                            {earlyDays > 0 && (
+                                                                                <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-1 py-0.2 rounded border border-emerald-200/60">{earlyDays}d early</span>
+                                                                            )}
+                                                                            {row.assignees.length > 0 && (
+                                                                                <span className="flex items-center gap-1 truncate max-w-[140px]" title={row.assignees.join(", ")}>
+                                                                                    <Users className="h-2.5 w-2.5" /> {row.assignees.join(", ")}
+                                                                                </span>
+                                                                            )}
+                                                                            <Badge variant="secondary" className="text-[8px] px-1 py-0 h-3.5 font-semibold">{row.status}</Badge>
+                                                                        </div>
+                                                                    </div>
+                                                                ) : (
+                                                                    /* Subtask / Leaf Node: Connected to Branch Line */
+                                                                    <div className="flex-1 min-w-0 p-1.5 rounded-lg hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition-colors flex flex-col justify-center my-0.5">
+                                                                        <div className="flex items-center gap-1.5 min-w-0">
+                                                                            <div className="w-4 h-4 rounded text-slate-400 dark:text-slate-500 flex items-center justify-center shrink-0">
+                                                                                <FileText className="h-3 w-3" />
+                                                                            </div>
+                                                                            <span className="text-[8px] font-semibold uppercase tracking-wider px-1 py-0.2 rounded bg-slate-100/80 dark:bg-slate-700/50 text-slate-500 shrink-0">
+                                                                                {levelLabel(row.level)}
+                                                                            </span>
+                                                                            <span className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate" title={row.title}>
+                                                                                {row.title}
+                                                                            </span>
+                                                                            {isMilestone && <span title="Checkpoint" className="inline-flex shrink-0"><Flag className="h-3 w-3 text-amber-500" /></span>}
+                                                                        </div>
+
+                                                                        {/* Metadata */}
+                                                                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] text-muted-foreground mt-0.5 pl-5">
+                                                                            <span className="flex items-center gap-1"><CalendarIcon className="h-2.5 w-2.5" /> {fmt(row.startDate)} → {fmt(row.endDate)}</span>
+                                                                            {plannedDuration !== null && <span className="flex items-center gap-1"><Clock className="h-2.5 w-2.5" /> {plannedDuration}d planned</span>}
+                                                                            {row.isCompleted && (
+                                                                                <span className="flex items-center gap-1 text-emerald-600 font-medium"><CheckCircle2 className="h-2.5 w-2.5" /> Done {fmt(row.actualCompletionDate)}</span>
+                                                                            )}
+                                                                            {delayed && (
+                                                                                <span className="flex items-center gap-1 text-red-600 font-bold bg-red-50 dark:bg-red-950/40 px-1 py-0.2 rounded border border-red-200/60"><AlertTriangle className="h-2.5 w-2.5" /> {delayDays}d delayed</span>
+                                                                            )}
+                                                                            {earlyDays > 0 && (
+                                                                                <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-1 py-0.2 rounded border border-emerald-200/60">{earlyDays}d early</span>
+                                                                            )}
+                                                                            {row.assignees.length > 0 && (
+                                                                                <span className="flex items-center gap-1 truncate max-w-[140px]" title={row.assignees.join(", ")}>
+                                                                                    <Users className="h-2.5 w-2.5" /> {row.assignees.join(", ")}
+                                                                                </span>
+                                                                            )}
+                                                                            <Badge variant="secondary" className="text-[8px] px-1 py-0 h-3.5 font-semibold">{row.status}</Badge>
+                                                                        </div>
+                                                                    </div>
                                                                 )}
-                                                                {delayed && (
-                                                                    <span className="flex items-center gap-1 text-red-600 font-semibold"><AlertTriangle className="h-2.5 w-2.5" /> {delayDays}d delayed</span>
-                                                                )}
-                                                                {earlyDays > 0 && (
-                                                                    <span className="flex items-center gap-1 text-emerald-600 font-semibold">{earlyDays}d early</span>
-                                                                )}
-                                                                {row.assignees.length > 0 && (
-                                                                    <span className="flex items-center gap-1 truncate max-w-[180px]" title={row.assignees.join(", ")}>
-                                                                        <Users className="h-2.5 w-2.5" /> {row.assignees.join(", ")}
-                                                                    </span>
-                                                                )}
-                                                                <Badge variant="secondary" className="text-[8px] px-1 py-0 h-3.5">{row.status}</Badge>
                                                             </div>
                                                         )}
                                                     </div>
