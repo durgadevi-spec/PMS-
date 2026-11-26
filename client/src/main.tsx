@@ -4,7 +4,6 @@ import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
 import "./index.css";
-import { AuthProvider } from "@/components/Layout";
 
 const container = document.getElementById("root");
 
@@ -21,9 +20,7 @@ const Root = isDevelopment ? React.StrictMode : React.Fragment;
 createRoot(container).render(
   <Root>
     <BrowserRouter>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
+      <App />
     </BrowserRouter>
   </Root>
 );

@@ -1037,7 +1037,7 @@ function computeOverlapLayout(timed: Occurrence[]): Map<string, LayoutInfo> {
 
 // ─── Day column (used by week + day views) ─────────────────────────────────
 
-const SNAP_MIN = 1; // resize/drag-select snapping granularity, in minutes — exact, follows the cursor
+const SNAP_MIN = 15; // resize/drag-select snapping granularity, in minutes (15 → :00, :15, :30, :45)
 const MIN_EVENT_MIN = 15; // shortest an event can be resized down to
 const CLICK_VS_DRAG_THRESHOLD_MIN = 5; // minimum drag distance (minutes) before it's treated as a range-select instead of a plain click
 
@@ -1072,12 +1072,16 @@ function DayColumn({
   const columnRef = useRef<HTMLDivElement>(null);
   const [selecting, setSelecting] = useState<{ startMin: number; currentMin: number } | null>(null);
 
-  const minuteFromClientY = (clientY: number) => {
+  // `floor` is used for where a press starts, so a plain click in the lower
+  // part of an hour never rounds up into the next hour. Moving/ending the
+  // selection rounds to the nearest 15-minute mark.
+  const minuteFromClientY = (clientY: number, floor = false) => {
     const rect = columnRef.current?.getBoundingClientRect();
     if (!rect) return 0;
     const offsetY = clientY - rect.top;
     const rawMin = (offsetY / ROW_H) * 60;
-    return Math.max(0, Math.min(24 * 60, Math.round(rawMin / SNAP_MIN) * SNAP_MIN));
+    const steps = floor ? Math.floor(rawMin / SNAP_MIN) : Math.round(rawMin / SNAP_MIN);
+    return Math.max(0, Math.min(24 * 60, steps * SNAP_MIN));
   };
 
   // Track the in-progress range selection with mousemove/mouseup on the
@@ -1103,7 +1107,10 @@ function DayColumn({
             // Barely moved — treat like the old single click behavior.
             onSlotClick(Math.floor(s.startMin / 60));
           } else if (onRangeSelect) {
-            onRangeSelect(Math.min(s.startMin, s.currentMin), Math.max(s.startMin, s.currentMin));
+            const rangeStart = Math.min(s.startMin, s.currentMin);
+            // Snapping can make a short drag collapse to one point; keep at least one 15-min slot.
+            const rangeEnd = Math.max(Math.max(s.startMin, s.currentMin), Math.min(rangeStart + SNAP_MIN, 24 * 60));
+            onRangeSelect(rangeStart, rangeEnd);
           } else {
             onSlotClick(Math.floor(Math.min(s.startMin, s.currentMin) / 60));
           }
@@ -1133,7 +1140,10 @@ function DayColumn({
     const handleMove = (e: MouseEvent) => {
       const deltaPx = e.clientY - resizing.startY;
       const rawDeltaMin = (deltaPx / ROW_H) * 60;
-      const snapped = Math.round(rawDeltaMin / SNAP_MIN) * SNAP_MIN;
+      // Snap the resulting END time to the 15-minute grid (not just the delta),
+      // so it lands on :00/:15/:30/:45 even if the event's current end doesn't.
+      const snappedEnd = Math.round((resizing.origEndMin + rawDeltaMin) / SNAP_MIN) * SNAP_MIN;
+      const snapped = snappedEnd - resizing.origEndMin;
       setResizing((r) => (r ? { ...r, deltaMin: snapped } : r));
     };
 
@@ -1163,7 +1173,7 @@ function DayColumn({
           key={hour}
           onMouseDown={(e) => {
             e.preventDefault();
-            const snapped = minuteFromClientY(e.clientY);
+            const snapped = minuteFromClientY(e.clientY, true);
             setSelecting({ startMin: snapped, currentMin: snapped });
           }}
           onDragOver={(e) => {
@@ -1887,19 +1897,21 @@ export default function CalendarEnhanced() {
       });
       const data = await res.json();
       reloadEvents();
+      if (data.pushWarning) console.warn("Google sync warning:", data.pushWarning);
 
       if (!silent) {
         if (data.pullError || data.pushError) {
           console.error("Google sync errors:", { pullError: data.pullError, pushError: data.pushError });
           toast({
             title: "Sync had errors",
-            description: (data.pullError || data.pushError || "").slice(0, 200),
+            description: [data.pullError || data.pushError, data.pushWarning].filter(Boolean).join(" ").slice(0, 200),
             variant: "destructive",
           });
         } else {
           toast({
             title: "Synced",
             description: `Pulled ${data.synced ?? 0}, pushed ${data.pushed ?? 0} event(s).${data.failed ? ` ${data.failed} push(es) failed — check console.` : ""
+              }${data.pushWarning ? ` ${data.pushWarning}` : ""
               }`,
           });
         }

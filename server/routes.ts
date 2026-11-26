@@ -108,6 +108,7 @@ import {
   taskDependencies,
   taskScheduleHistory,
   taskDateExtensionRequests,
+  appSettings,
 } from "../shared/schema.ts";
 import * as dependencyService from "./dependencyService.ts";
 
@@ -3950,6 +3951,49 @@ export async function registerRoutes(
 
   class DateExtensionRequestError extends Error { }
 
+  // Admin setting: "No Approval Required for Task Date Changes".
+  // When ON, a task date change that would normally need admin approval only
+  // needs a reason and is applied immediately. Fails closed (OFF => existing
+  // approval workflow) if the setting cannot be read.
+  const TASK_DATE_NO_APPROVAL_KEY = "task_date_no_approval_required";
+
+  // Cached for 30s (and refreshed immediately when an admin saves) so this
+  // setting never adds a database round trip to every request.
+  let taskDateNoApprovalCache: { value: boolean; at: number } | null = null;
+
+  async function isTaskDateNoApprovalEnabled(): Promise<boolean> {
+    if (taskDateNoApprovalCache && Date.now() - taskDateNoApprovalCache.at < 30_000) {
+      return taskDateNoApprovalCache.value;
+    }
+    try {
+      const [row] = await db.select({ value: appSettings.value })
+        .from(appSettings)
+        .where(eq(appSettings.key, TASK_DATE_NO_APPROVAL_KEY))
+        .limit(1);
+      const value = row?.value === "true";
+      taskDateNoApprovalCache = { value, at: Date.now() };
+      return value;
+    } catch (err) {
+      console.error("[Settings] Failed to read task date approval setting:", err);
+      return false;
+    }
+  }
+
+  // Reason-only mode validation (toggle ON): a reason is mandatory, but no
+  // approval request is created and the dates are applied directly.
+  function assertReasonForDirectDateChange(
+    reason: unknown,
+    requestedStartDate: string | null | undefined,
+    requestedEndDate: string | null | undefined
+  ) {
+    if (typeof reason !== "string" || !reason.trim()) {
+      throw new DateExtensionRequestError("A reason is required for task date changes.");
+    }
+    if (requestedStartDate && requestedEndDate && requestedEndDate < requestedStartDate) {
+      throw new DateExtensionRequestError("The requested end date cannot be before the requested start date.");
+    }
+  }
+
   async function createTaskDateExtensionRequest(
     task: typeof projectTasks.$inferSelect,
     requestedStartDate: string | null,
@@ -4515,7 +4559,22 @@ export async function registerRoutes(
       const datesChanged =
         requestedStartDate !== (oldTask?.startDate ?? null) ||
         requestedEndDate !== (oldTask?.endDate ?? null);
-      if (oldTask && datesChanged && requiresTaskDateApproval(oldTask) && !isAdmin) {
+      const putNoApproval = Boolean(oldTask && datesChanged && requiresTaskDateApproval(oldTask) && !isAdmin)
+        && await isTaskDateNoApprovalEnabled();
+      if (putNoApproval) {
+        try {
+          assertReasonForDirectDateChange(
+            req.body.scheduleChangeReason || req.body.reason,
+            requestedStartDate,
+            requestedEndDate
+          );
+        } catch (reasonError) {
+          return res.status(400).json({
+            message: reasonError instanceof Error ? reasonError.message : "A reason is required for task date changes.",
+          });
+        }
+      }
+      if (oldTask && datesChanged && requiresTaskDateApproval(oldTask) && !isAdmin && !putNoApproval) {
         try {
           dateExtensionRequest = await createTaskDateExtensionRequest(
             oldTask,
@@ -4957,7 +5016,22 @@ export async function registerRoutes(
           initialSetupExpiresAt: scheduleSnapshot.initialSetupExpiresAt,
         }
         : null;
-      if (scheduleSnapshot && datesChanged && currentTaskForApproval && requiresTaskDateApproval(currentTaskForApproval) && !isAdminReq(req)) {
+      const patchNoApproval = Boolean(scheduleSnapshot && datesChanged && currentTaskForApproval && requiresTaskDateApproval(currentTaskForApproval) && !isAdminReq(req))
+        && await isTaskDateNoApprovalEnabled();
+      if (patchNoApproval) {
+        try {
+          assertReasonForDirectDateChange(
+            data.scheduleChangeReason || data.reason,
+            requestedStartDate,
+            requestedEndDate
+          );
+        } catch (reasonError) {
+          return res.status(400).json({
+            message: reasonError instanceof Error ? reasonError.message : "A reason is required for task date changes.",
+          });
+        }
+      }
+      if (scheduleSnapshot && datesChanged && currentTaskForApproval && requiresTaskDateApproval(currentTaskForApproval) && !isAdminReq(req) && !patchNoApproval) {
         try {
           const [fullTask] = await db.select().from(projectTasks).where(eq(projectTasks.id, id)).limit(1);
           if (!fullTask) return res.status(404).json({ message: "Task not found" });
@@ -6001,6 +6075,7 @@ export async function registerRoutes(
         projectId: string;
         before: { startDate: string | null; endDate: string | null; duration: number | null };
         after: { startDate: string | null; endDate: string | null; duration: number | null };
+        userReason?: string;
       }> = [];
 
       // We'll perform each task's membership update and optional date update.
@@ -6055,7 +6130,12 @@ export async function registerRoutes(
             const scheduleChanged =
               requestedStartDate !== existingTask.startDate ||
               requestedEndDate !== existingTask.endDate;
-            const needsApproval = scheduleChanged && requiresTaskDateApproval(existingTask) && !isAdmin;
+            const approvalRequiredByRules = scheduleChanged && requiresTaskDateApproval(existingTask) && !isAdmin;
+            const noApprovalMode = approvalRequiredByRules && await isTaskDateNoApprovalEnabled();
+            if (noApprovalMode) {
+              assertReasonForDirectDateChange(scheduleReason, requestedStartDate, requestedEndDate);
+            }
+            const needsApproval = approvalRequiredByRules && !noApprovalMode;
 
             if (needsApproval) {
               if (requestedStartDate && requestedEndDate && requestedEndDate < requestedStartDate) {
@@ -6091,6 +6171,7 @@ export async function registerRoutes(
                 bulkScheduleChanges.push({
                   taskId: existingTask.id,
                   projectId: existingTask.projectId,
+                  ...(noApprovalMode ? { userReason: String(scheduleReason).trim() } : {}),
                   before: {
                     startDate: existingTask.startDate ?? null,
                     endDate: existingTask.endDate ?? null,
@@ -6123,7 +6204,7 @@ export async function registerRoutes(
           change.after,
           {
             changeType: "System",
-            reason: "Bulk task date update",
+            reason: change.userReason || "Bulk task date update",
             changedBy: req.employee?.id || null,
           }
         );
@@ -8455,6 +8536,43 @@ export async function registerRoutes(
   });
 
   /* ===============================================================
+      SETTINGS — TASK DATE APPROVAL (admin only)
+  =================================================================== */
+  app.get("/api/settings/task-date-approval", requireAuth, requireAdmin, async (_req: any, res) => {
+    res.json({ noApprovalRequired: await isTaskDateNoApprovalEnabled() });
+  });
+
+  app.put("/api/settings/task-date-approval", requireAuth, requireAdmin, async (req: any, res) => {
+    try {
+      const { noApprovalRequired } = req.body || {};
+      if (typeof noApprovalRequired !== "boolean") {
+        return res.status(400).json({ error: "noApprovalRequired must be a boolean" });
+      }
+      await db.insert(appSettings)
+        .values({
+          key: TASK_DATE_NO_APPROVAL_KEY,
+          value: String(noApprovalRequired),
+          updatedBy: req.user?.id || null,
+        })
+        .onConflictDoUpdate({
+          target: appSettings.key,
+          set: { value: String(noApprovalRequired), updatedBy: req.user?.id || null, updatedAt: new Date() },
+        });
+      taskDateNoApprovalCache = { value: noApprovalRequired, at: Date.now() };
+      res.json({ noApprovalRequired });
+    } catch (err) {
+      console.error("Failed to save task date approval setting:", err);
+      res.status(500).json({ error: "Failed to save setting" });
+    }
+  });
+
+  // Read-only behaviour flag for the task UI (any signed-in user). It exposes
+  // only whether date changes need approval, never the admin settings screen.
+  app.get("/api/task-date-approval-mode", requireAuth, async (_req: any, res) => {
+    res.json({ noApprovalRequired: await isTaskDateNoApprovalEnabled() });
+  });
+
+  /* ===============================================================
       SETTINGS — EMPLOYEES (create / update / delete)
   =================================================================== */
   app.post("/api/employees", requireAuth, requireAdmin, async (req: any, res) => {
@@ -9133,6 +9251,7 @@ export async function registerRoutes(
         ...result,
         pushed: pushResult.pushed,
         failed: pushResult.failed,
+        pushWarning: pushResult.warning,
         pullError: result.error,
         pushError: pushResult.error,
       });
@@ -10199,7 +10318,18 @@ export async function registerRoutes(
       const datesChanged =
         (requestedStartDate || null) !== (task.startDate || null) ||
         (requestedEndDate || null) !== (task.endDate || null);
-      if (datesChanged && requiresTaskDateApproval(task) && !isAdminReq(req)) {
+      const scheduleNoApproval = Boolean(datesChanged && requiresTaskDateApproval(task) && !isAdminReq(req))
+        && await isTaskDateNoApprovalEnabled();
+      if (scheduleNoApproval) {
+        try {
+          assertReasonForDirectDateChange(reason, requestedStartDate || null, requestedEndDate || null);
+        } catch (reasonError) {
+          return res.status(400).json({
+            message: reasonError instanceof Error ? reasonError.message : "A reason is required for task date changes.",
+          });
+        }
+      }
+      if (datesChanged && requiresTaskDateApproval(task) && !isAdminReq(req) && !scheduleNoApproval) {
         try {
           const request = await createTaskDateExtensionRequest(
             task,

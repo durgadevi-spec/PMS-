@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -113,6 +114,7 @@ export default function AdminSettings() {
           <TabsTrigger value="employees">Employees</TabsTrigger>
           <TabsTrigger value="departments">Departments</TabsTrigger>
           <TabsTrigger value="users">User Accounts</TabsTrigger>
+          <TabsTrigger value="task-approvals">Task Date Approvals</TabsTrigger>
         </TabsList>
 
         <TabsContent value="employees" className="mt-4">
@@ -126,8 +128,87 @@ export default function AdminSettings() {
         <TabsContent value="users" className="mt-4">
           <UsersTab users={users} employees={employees} onChanged={() => load(true)} />
         </TabsContent>
+
+        <TabsContent value="task-approvals" className="mt-4">
+          <TaskDateApprovalTab />
+        </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/* ===============================
+   Task Date Approvals Tab (admin only)
+================================ */
+function TaskDateApprovalTab() {
+  const { toast } = useToast();
+  const [enabled, setEnabled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiFetch("/api/settings/task-date-approval", { bypassCache: true });
+        if (res.ok) setEnabled(Boolean((await res.json()).noApprovalRequired));
+      } catch (err: any) {
+        toast({ title: "Failed to load setting", description: err?.message, variant: "destructive" });
+      } finally {
+        setLoaded(true);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleToggle = async (next: boolean) => {
+    const previous = enabled;
+    setEnabled(next);
+    setSaving(true);
+    try {
+      const res = await apiFetch("/api/settings/task-date-approval", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ noApprovalRequired: next }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Failed to save setting");
+      toast({
+        title: "Setting saved",
+        description: next
+          ? "Task date changes now only need a reason and apply immediately."
+          : "Task date changes now require admin approval.",
+      });
+    } catch (err: any) {
+      setEnabled(previous);
+      toast({ title: "Failed to save setting", description: err?.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="flex items-start justify-between gap-6">
+          <div className="space-y-1">
+            <h2 className="text-lg font-semibold">No Approval Required for Task Date Changes</h2>
+            <p className="text-sm text-muted-foreground max-w-2xl">
+              When ON, changing a task's dates only requires a reason and the new dates are applied
+              automatically, with no approval request. When OFF, date changes continue to need a reason
+              and admin approval. Tasks in their 2-day initial setup period never need a reason or approval.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {(!loaded || saving) && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            <Switch
+              checked={enabled}
+              disabled={!loaded || saving}
+              onCheckedChange={handleToggle}
+              aria-label="No Approval Required for Task Date Changes"
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

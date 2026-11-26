@@ -82,6 +82,7 @@ import TaskScheduleHistoryDialog from "@/components/TaskScheduleHistoryDialog";
 import { DeleteConfirmModal } from "@/components/DeleteConfirmModal";
 import { TaskInitialSetupBadge } from "@/components/TaskInitialSetupIndicator";
 import { isTaskInInitialSetup } from "@shared/taskInitialSetup";
+import { useTaskDateNoApproval } from "@/lib/useTaskDateApprovalMode";
 import logoImg from "./logo.jpg";
 
 /* ================= TYPES ================= */
@@ -694,6 +695,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
   const navigate = useNavigate();
   const { toast } = useToast();
   const isAdmin = user?.role === "ADMIN" || user?.employeeCode === "E0001";
+  const taskDateNoApproval = useTaskDateNoApproval();
   // Task Dependency & Automatic Schedule Management: centralized mandatory
   // "why are you changing this schedule?" popup, shared by every inline
   // date/duration edit on this page.
@@ -1589,7 +1591,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
     const setupActive = isTaskInInitialSetup(taskBeforeEdit?.initialSetupExpiresAt);
     const setupExpired = Boolean(taskBeforeEdit?.initialSetupExpiresAt) && !setupActive;
     const dateApprovalExpected =
-      isScheduleField && !setupActive && (setupExpired || taskIsOverdue) && !isAdmin;
+      isScheduleField && !setupActive && (setupExpired || taskIsOverdue) && !isAdmin && !taskDateNoApproval;
     const hadExistingValue = taskBeforeEdit
       ? (taskBeforeEdit as any)[field] !== null && (taskBeforeEdit as any)[field] !== undefined && (taskBeforeEdit as any)[field] !== ""
       : false;
@@ -2735,7 +2737,7 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
           const updatedTask = { ...task };
 
           // Update dates if provided
-          const needsApproval = tasksRequiringDateApproval.some((approvalTask) => approvalTask.id === task.id);
+          const needsApproval = !taskDateNoApproval && tasksRequiringDateApproval.some((approvalTask) => approvalTask.id === task.id);
           if (!needsApproval && bulkAssignStartDate) updatedTask.startDate = bulkAssignStartDate;
           if (!needsApproval && bulkAssignEndDate) updatedTask.endDate = bulkAssignEndDate;
           if (bulkAssignCompletionDate) updatedTask.completionDate = bulkAssignCompletionDate;

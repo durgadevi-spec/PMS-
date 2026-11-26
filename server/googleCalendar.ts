@@ -15,6 +15,35 @@ const SCOPE = "https://www.googleapis.com/auth/calendar.events email profile";
 const AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CAL_API = "https://www.googleapis.com/calendar/v3";
+const GOOGLE_RATE_LIMIT_RETRIES = 3;
+
+function delay(milliseconds: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function isGoogleRateLimitResponse(response: Response): Promise<boolean> {
+    if (response.status === 429) return true;
+    if (response.status !== 403) return false;
+
+    try {
+        const data = await response.clone().json();
+        const reasons = (data?.error?.errors || []).map((error: any) => String(error.reason || ""));
+        return reasons.some((reason: string) => /rateLimitExceeded|userRateLimitExceeded/i.test(reason)) ||
+            /rate limit exceeded/i.test(String(data?.error?.message || ""));
+    } catch {
+        return false;
+    }
+}
+
+async function fetchCalendarApi(url: string, init: RequestInit): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+        const response = await fetch(url, init);
+        if (attempt >= GOOGLE_RATE_LIMIT_RETRIES || !(await isGoogleRateLimitResponse(response))) {
+            return response;
+        }
+        await delay(500 * (2 ** attempt) + Math.floor(Math.random() * 250));
+    }
+}
 
 if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REDIRECT_URI) {
     console.warn(
@@ -180,7 +209,7 @@ export async function disconnectGoogle(userId: string) {
 /* ============================================================
    Map our internal event shape -> Google Calendar event shape
 ============================================================ */
-function toGoogleEvent(evt: any, timeZone: string = "UTC") {
+function toGoogleEvent(evt: any, timeZone: string = "UTC"): { body: any; warning?: string } {
     const g: any = {
         summary: evt.title || "Untitled event",
         description: evt.description || undefined,
@@ -192,10 +221,17 @@ function toGoogleEvent(evt: any, timeZone: string = "UTC") {
         guestsCanSeeOtherGuests: evt.guestsCanSeeGuestList !== false,
     };
 
+    let invalidAttendeeCount = 0;
     if (Array.isArray(evt.guests) && evt.guests.length > 0) {
-        g.attendees = evt.guests
-            .map((gu: any) => (typeof gu === "string" ? { email: gu } : { email: gu.email }))
-            .filter((a: any) => !!a.email);
+        const attendees = evt.guests.flatMap((guest: any) => {
+            const email = typeof guest === "string" ? guest.trim() : guest?.email?.trim?.();
+            if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                invalidAttendeeCount++;
+                return [];
+            }
+            return [{ email }];
+        });
+        if (attendees.length > 0) g.attendees = attendees;
     }
 
     if (evt.allDay) {
@@ -209,7 +245,12 @@ function toGoogleEvent(evt: any, timeZone: string = "UTC") {
         g.end = { dateTime: combineDateTime(evt.endDate || evt.date, evt.endTime), timeZone };
     }
 
-    return g;
+    return {
+        body: g,
+        ...(invalidAttendeeCount > 0
+            ? { warning: `Omitted ${invalidAttendeeCount} invalid attendee email(s) from "${evt.title || "Untitled event"}".` }
+            : {}),
+    };
 }
 
 function combineDateTime(dateStr: string, timeStr: string): string {
@@ -263,7 +304,7 @@ function fromGoogleEvent(g: any) {
    All of these are best-effort: failures are logged, not thrown,
    so a Google hiccup never blocks the user's normal CRUD action.
 ============================================================ */
-export type PushResult = { success: boolean; error?: string; skipped?: boolean };
+export type PushResult = { success: boolean; error?: string; skipped?: boolean; warning?: string };
 
 export async function pushEventToGoogle(userId: string, event: any, timeZone: string = "UTC"): Promise<PushResult> {
     try {
@@ -276,11 +317,14 @@ export async function pushEventToGoogle(userId: string, event: any, timeZone: st
             .where(eq(googleCalendarAccounts.userId, userId));
         const calendarId = account?.calendarId || "primary";
 
-        const body = toGoogleEvent(event, timeZone);
+        const { body, warning } = toGoogleEvent(event, timeZone);
+        if (warning) {
+            console.warn(`[Google sync] ${warning} (event ${event.id})`);
+        }
 
         if (event.googleEventId) {
             // Update existing
-            const res = await fetch(
+            const res = await fetchCalendarApi(
                 `${CAL_API}/calendars/${encodeURIComponent(calendarId)}/events/${event.googleEventId}`,
                 {
                     method: "PATCH",
@@ -293,10 +337,10 @@ export async function pushEventToGoogle(userId: string, event: any, timeZone: st
                 console.error("Google event update failed:", res.status, text);
                 return { success: false, error: `Google returned ${res.status}: ${text.slice(0, 300)}` };
             }
-            return { success: true };
+            return { success: true, warning };
         } else {
             // Create new
-            const res = await fetch(`${CAL_API}/calendars/${encodeURIComponent(calendarId)}/events`, {
+            const res = await fetchCalendarApi(`${CAL_API}/calendars/${encodeURIComponent(calendarId)}/events`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
                 body: JSON.stringify(body),
@@ -311,7 +355,7 @@ export async function pushEventToGoogle(userId: string, event: any, timeZone: st
                 .update(calendarEvents)
                 .set({ googleEventId: data.id, googleUpdatedAt: new Date() })
                 .where(eq(calendarEvents.id, event.id));
-            return { success: true };
+            return { success: true, warning };
         }
     } catch (err: any) {
         console.error("pushEventToGoogle error:", err);
@@ -331,7 +375,7 @@ export async function deleteEventFromGoogle(userId: string, googleEventId: strin
             .where(eq(googleCalendarAccounts.userId, userId));
         const calendarId = account?.calendarId || "primary";
 
-        const res = await fetch(
+        const res = await fetchCalendarApi(
             `${CAL_API}/calendars/${encodeURIComponent(calendarId)}/events/${googleEventId}`,
             { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
         );
@@ -376,7 +420,7 @@ export async function syncFromGoogle(userId: string): Promise<{ synced: number; 
         if (syncToken) params.set("syncToken", syncToken);
         else params.set("timeMin", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString());
 
-        const res = await fetch(
+        const res = await fetchCalendarApi(
             `${CAL_API}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`,
             { headers: { Authorization: `Bearer ${token}` } }
         );
@@ -437,9 +481,9 @@ export async function syncFromGoogle(userId: string): Promise<{ synced: number; 
                 }
             });
 
-            // Execute in batches of 20
-            for (let i = 0; i < writeOps.length; i += 20) {
-                await Promise.all(writeOps.slice(i, i + 20).map((op: () => Promise<void>) => op()));
+            // Keep each batch below the database session pooler's 15-client limit.
+            for (let i = 0; i < writeOps.length; i += 5) {
+                await Promise.all(writeOps.slice(i, i + 5).map((op: () => Promise<void>) => op()));
             }
             synced += items.filter((g: any) => g.status !== "cancelled").length;
         }
@@ -463,37 +507,33 @@ export async function syncFromGoogle(userId: string): Promise<{ synced: number; 
 export async function syncToGoogle(
     userId: string,
     timeZone: string = "UTC"
-): Promise<{ pushed: number; failed: number; error?: string }> {
+): Promise<{ pushed: number; failed: number; error?: string; warning?: string }> {
     const token = await getValidAccessToken(userId);
     if (!token) return { pushed: 0, failed: 0 };
 
-    // Limit to 50 pushes per request to prevent Vercel 504 timeout on large backlogs
+    // Pace backlog pushes to stay below Google Calendar's per-user rate limit.
     const unsynced = await db
         .select()
         .from(calendarEvents)
         .where(and(eq(calendarEvents.userId, userId), isNull(calendarEvents.googleEventId)))
-        .limit(50);
+        .limit(20);
 
     let pushed = 0;
     let failed = 0;
     let firstError: string | undefined;
+    let firstWarning: string | undefined;
 
-    const pushOps = unsynced.map(evt => async () => {
-        return await pushEventToGoogle(userId, evt, timeZone);
-    });
-
-    // Execute in batches of 10
-    for (let i = 0; i < pushOps.length; i += 10) {
-        const results = await Promise.all(pushOps.slice(i, i + 10).map(op => op()));
-        for (const result of results) {
-            if (result.success) {
-                pushed++;
-            } else if (!result.skipped) {
-                failed++;
-                if (!firstError) firstError = result.error;
-            }
+    for (let i = 0; i < unsynced.length; i++) {
+        const result = await pushEventToGoogle(userId, unsynced[i], timeZone);
+        if (result.success) {
+            pushed++;
+            if (!firstWarning && result.warning) firstWarning = result.warning;
+        } else if (!result.skipped) {
+            failed++;
+            if (!firstError) firstError = result.error;
         }
+        if (i < unsynced.length - 1) await delay(300);
     }
 
-    return { pushed, failed, error: firstError };
+    return { pushed, failed, error: firstError, warning: firstWarning };
 }

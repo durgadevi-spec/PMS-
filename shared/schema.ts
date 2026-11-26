@@ -750,6 +750,15 @@ export const taskDateExtensionRequests = pgTable("task_date_extension_requests",
   index("idx_task_date_extension_requests_requested_at").on(table.requestedAt),
 ]);
 
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedBy: uuid("updated_by"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;
+
 export type TaskDependency = typeof taskDependencies.$inferSelect;
 export type TaskScheduleHistory = typeof taskScheduleHistory.$inferSelect;
 export type TaskDateExtensionRequest = typeof taskDateExtensionRequests.$inferSelect;

@@ -120,6 +120,18 @@
   2. Stored both in `client/src/assets/` and `client/public/` (`logo-dark-sidebar.png` and `logo-light-sidebar.png`).
   3. Placed them in the `h-20` sidebar header in `Layout.tsx` centered horizontally and vertically at `h-[52px]` and `max-w-[185px]`, conditionally rendering the light logo when in White mode and the dark logo when in Periwinkle mode.
 
+## [2026-11-26] 019 - Database-Level Initial Setup Deadline for Direct Task Inserts
+- **Context**: BOQ-synced tasks can bypass the PMS task API and insert directly into PostgreSQL, leaving `initial_setup_expires_at` null and disabling the Initial Setup badge and grace period.
+- **Decision**: Add a `BEFORE INSERT` trigger on `project_tasks` to populate a missing deadline from `created_at` plus two days, and backfill only null-deadline tasks created within the preceding two days. This covers direct integrations without changing older tasks.
+
+## [2026-11-26] 020 - Google Calendar Sync Backpressure and Invalid Guests
+- **Context**: Parallel event writes exceeded the database session pooler limit; bursts of Google Calendar API creates hit per-user rate limits, and malformed attendee addresses caused otherwise valid events to be rejected.
+- **Decision**: Limit Google pull writes to small batches, pace backlog pushes, retry transient Google rate-limit responses with bounded exponential backoff, and omit malformed attendee addresses while surfacing a warning. PMS project tasks remain outside Google event sync until the desired assignment scope is confirmed.
+
+## [2026-11-26] 021 - Remove Duplicate Session Restoration
+- **Context**: `main.tsx` and `App.tsx` both mounted `AuthProvider`, causing duplicate `/api/me` requests and duplicate auth state during every app startup.
+- **Decision**: Keep the provider owned by `App.tsx` and remove the redundant wrapper from `main.tsx`; leave route-level lazy loading and existing API cache behavior unchanged.
+
 
 
 

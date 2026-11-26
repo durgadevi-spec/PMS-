@@ -136,3 +136,11 @@
   - Added bottom interactive Dark/Light Mode switch toggle with Sun/Moon icons, allowing instant switching between both reference designs.
   - Aligned button colors across `KeyStepSlideDrawer.tsx`, `KeyStepsFullPage.tsx`, `Projects.tsx`, and `index.css` (`--primary`, `--ring`) from harsh `#7047EB` to `#5D5FEF`.
   - Verified full TypeScript compilation (`npm run check`) and production bundling (`npm run build`) with zero errors.
+
+## 8. Recently Completed (2026-11-26)
+- Added a database-level insert trigger for the task Initial Setup grace period so direct integrations such as BOQ imports receive `initial_setup_expires_at` even when they omit the column or insert `NULL`.
+- Added a bounded backfill for tasks created within the previous two days that still have no setup deadline. Apply migration `0027_task_initial_setup_database_default.sql` to the database.
+- Reduced Google Calendar pull/push concurrency and paced unsynced event pushes to prevent Supabase connection exhaustion and Google API rate limiting.
+- Added bounded retry for Google Calendar rate-limit responses and surfaced warnings when invalid attendee email addresses are omitted from a pushed event.
+- PMS project tasks still display separately in the app calendar and are not currently pushed to Google Calendar; task sync behavior is pending user direction.
+- Removed the duplicate root-level `AuthProvider` so app startup restores the session once instead of issuing two `/api/me` requests. Existing route-level lazy loading and GET caching remain unchanged.
