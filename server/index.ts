@@ -72,7 +72,8 @@ app.use(express.urlencoded({ extended: false }));
 // Security headers for performance and security
 app.use((req, res, next) => {
   // Cache control for static assets
-  if (req.path.startsWith('/public')) {
+  if (req.path.startsWith('/public') || req.path.startsWith('/assets/')) {
+    // Vite emits content-hashed files under /assets — safe to cache for a year
     res.set('Cache-Control', 'public, max-age=31536000, immutable');
   }
   // API GET responses are NOT cached at the HTTP layer on purpose: the
@@ -83,8 +84,11 @@ app.use((req, res, next) => {
   // completely bypassing that invalidation.
   else if (req.method === 'GET' && req.path.startsWith('/api')) {
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  } else if (/\.(png|jpe?g|svg|webp|gif|ico|woff2?)$/i.test(req.path)) {
+    res.set('Cache-Control', 'public, max-age=86400');
   } else {
-    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    // index.html etc. must always be revalidated so users get new builds
+    res.set('Cache-Control', 'no-cache');
   }
   next();
 });
@@ -118,9 +122,9 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       const duration = Date.now() - start;
       log(
-        `${req.method} ${path} ${res.statusCode} in ${duration}ms` +
-        (capturedJsonResponse
-          ? ` :: ${JSON.stringify(capturedJsonResponse)}`
+        `${duration > 1000 ? "🐢 SLOW " : ""}${req.method} ${path} ${res.statusCode} in ${duration}ms` +
+        (capturedJsonResponse && process.env.LOG_API_BODIES === "true"
+          ? ` :: ${JSON.stringify(capturedJsonResponse).slice(0, 200)}`
           : "")
       );
     }

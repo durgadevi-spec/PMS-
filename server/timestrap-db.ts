@@ -14,13 +14,14 @@ if (!TIMESTRAP_DATABASE_URL) {
  */
 export const timestrapPool = TIMESTRAP_DATABASE_URL
   ? new Pool({
-      connectionString: TIMESTRAP_DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 3,
-      idleTimeoutMillis: 10_000,
-      connectionTimeoutMillis: 30_000,
-      statement_timeout: 30_000,
-    })
+    connectionString: TIMESTRAP_DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+    idleTimeoutMillis: 60_000,
+    keepAlive: true,
+    connectionTimeoutMillis: 30_000,
+    statement_timeout: 30_000,
+  })
   : null;
 
 if (timestrapPool) {
@@ -44,7 +45,7 @@ if (timestrapPool) {
 /**
  * Query timestrap database for time entries
  */
-export async function queryTimestrapDB(query: string, params: any[] = []) {
+async function queryTimestrapDBRaw(query: string, params: any[] = []) {
   if (!timestrapPool) {
     throw new Error("Timestrap database connection is not configured");
   }
@@ -57,6 +58,22 @@ export async function queryTimestrapDB(query: string, params: any[] = []) {
     console.error("Timestrap query error:", error?.message || error);
     throw err;
   }
+}
+
+// PERF: getProjectTimeEntries/getTaskTimeEntries used to run 2-3 information_schema lookups against the
+// remote Timestrap DB on EVERY call. Table structure almost never changes, so cache those for 10 minutes.
+const SCHEMA_CACHE_TTL_MS = 10 * 60 * 1000;
+const schemaCache = new Map<string, { at: number; value: Promise<any> }>();
+
+export async function queryTimestrapDB(query: string, params: any[] = []) {
+  if (!/information_schema/i.test(query)) return queryTimestrapDBRaw(query, params);
+  const key = query.replace(/\s+/g, " ").trim() + "|" + JSON.stringify(params);
+  const hit = schemaCache.get(key);
+  if (hit && Date.now() - hit.at < SCHEMA_CACHE_TTL_MS) return hit.value;
+  const value = queryTimestrapDBRaw(query, params);
+  schemaCache.set(key, { at: Date.now(), value });
+  value.catch(() => schemaCache.delete(key)); // never keep a failed lookup
+  return value;
 }
 
 /**
@@ -97,12 +114,32 @@ function parseTimestrapHours(value: any) {
   return hours + minutes / 60;
 }
 
+
+// 30-second result cache (+ in-flight de-duplication) so opening/refreshing a project doesn't hit the
+// remote Timestrap database every time. Override with TIMESTRAP_CACHE_TTL_MS (0 disables).
+const RESULT_TTL_MS = Number(process.env.TIMESTRAP_CACHE_TTL_MS ?? 30_000);
+const resultCache = new Map<string, { at: number; value: Promise<any> }>();
+function memo<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  if (!(RESULT_TTL_MS > 0)) return fn();
+  const hit = resultCache.get(key);
+  if (hit && Date.now() - hit.at < RESULT_TTL_MS) return hit.value as Promise<T>;
+  const value = fn();
+  resultCache.set(key, { at: Date.now(), value });
+  value.catch(() => resultCache.delete(key));
+  if (resultCache.size > 500) { const first = resultCache.keys().next().value; if (first) resultCache.delete(first); }
+  return value;
+}
+
 export interface ProjectTimeEntriesResult {
   entries: any[];
   lastEntryDate: string | null;
 }
 
 export async function getProjectTimeEntries(projectName: string): Promise<ProjectTimeEntriesResult> {
+  return memo(`p|${projectName}`, () => getProjectTimeEntriesUncached(projectName));
+}
+
+async function getProjectTimeEntriesUncached(projectName: string): Promise<ProjectTimeEntriesResult> {
   if (!timestrapPool) {
     console.warn("Timestrap pool not initialized");
     return { entries: [], lastEntryDate: null };
@@ -349,6 +386,10 @@ export async function getTimestrapTableInfo() {
  * Searches task_name, task, activity, and description columns in time_entries.
  */
 export async function getTaskTimeEntries(projectName: string, taskName: string): Promise<any[]> {
+  return memo(`t|${projectName}|${taskName}`, () => getTaskTimeEntriesUncached(projectName, taskName));
+}
+
+async function getTaskTimeEntriesUncached(projectName: string, taskName: string): Promise<any[]> {
   if (!timestrapPool) {
     console.warn("Timestrap pool not initialized — skipping task time entries");
     return [];

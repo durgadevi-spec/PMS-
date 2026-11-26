@@ -1149,6 +1149,31 @@ export async function registerRoutes(
     return result;
   }
 
+  // PERF helpers: the old code used multi-table LEFT JOIN + OR conditions, which multiplies rows and can't use
+  // indexes well. A UNION of small indexed lookups returns the same ids much faster.
+  async function getAssignedProjectIds(empId: string): Promise<{ projectId: string }[]> {
+    const r: any = await db.execute(sql`
+      SELECT t.project_id AS "projectId" FROM project_tasks t WHERE t.assigner_id = ${empId}
+      UNION
+      SELECT t.project_id FROM project_tasks t JOIN task_members tm ON tm.task_id = t.id WHERE tm.employee_id = ${empId}
+      UNION
+      SELECT t.project_id FROM project_tasks t JOIN subtasks s ON s.task_id = t.id WHERE s.assigned_to = ${empId}
+      UNION
+      SELECT t.project_id FROM project_tasks t JOIN subtasks s ON s.task_id = t.id
+        JOIN subtask_members sm ON sm.subtask_id = s.id WHERE sm.employee_id = ${empId}
+    `);
+    return (r.rows || []) as { projectId: string }[];
+  }
+
+  async function getSubtaskAssignedTaskIds(empId: string): Promise<{ taskId: string }[]> {
+    const r: any = await db.execute(sql`
+      SELECT s.task_id AS "taskId" FROM subtasks s WHERE s.assigned_to = ${empId}
+      UNION
+      SELECT s.task_id FROM subtasks s JOIN subtask_members sm ON sm.subtask_id = s.id WHERE sm.employee_id = ${empId}
+    `);
+    return (r.rows || []) as { taskId: string }[];
+  }
+
   // Middleware to require authentication. Expects Authorization: Bearer <token>
   async function requireAuth(req: any, res: any, next: any) {
     try {
@@ -1806,7 +1831,6 @@ export async function registerRoutes(
   // GET ALL PROJECTS (requires auth)
   app.get("/api/projects", requireAuth, async (req: any, res) => {
     try {
-      console.log('[TRACE] /api/projects handler entered - req.user/employee:', { user: req.user ? { id: req.user.id, role: req.user.role, username: req.user.username } : null, employee: req.employee ? { id: req.employee.id, empCode: req.employee.empCode } : null });
       // TEMP TEST: ensure handler executes and error paths are visible
       // throw new Error('early-fail-test');
       const requestingEmployeeId = req.employee?.id || null;
@@ -1819,8 +1843,6 @@ export async function registerRoutes(
       let vendors: any[] = [];
 
       // DEBUG: inspect `projects` export before querying
-      console.log('[DEBUG] projects object keys:', Object.keys(projects || {}));
-      console.log('[DEBUG] projects.createdAt present:', !!projects?.createdAt);
 
       // (Raw SQL fallback removed)
 
@@ -1887,7 +1909,6 @@ export async function registerRoutes(
       }
 
       const allProjectIds = allProjects.map((p) => p.id);
-      console.log('[DEBUG] /api/projects - allProjectIds sample =', allProjectIds.slice(0, 10));
 
       if (allProjectIds.length === 0) {
         return res.json([]);
@@ -1899,26 +1920,8 @@ export async function registerRoutes(
         db.select().from(projectTeamMembers).where(inArray(projectTeamMembers.projectId, allProjectIds)),
         db.select().from(projectVendors).where(inArray(projectVendors.projectId, allProjectIds)),
         !isAdmin ? db.select({ projectId: projectTeamMembers.projectId }).from(projectTeamMembers).where(eq(projectTeamMembers.employeeId, requestingEmployeeId)) : Promise.resolve([]),
-        !isAdmin ? db.select({ projectId: projectTasks.projectId })
-          .from(projectTasks)
-          .leftJoin(taskMembers, eq(projectTasks.id, taskMembers.taskId))
-          .leftJoin(subtasks, eq(projectTasks.id, subtasks.taskId))
-          .leftJoin(subtaskMembers, eq(subtasks.id, subtaskMembers.subtaskId))
-          .where(or(
-            eq(taskMembers.employeeId, requestingEmployeeId),
-            eq(subtasks.assignedTo, requestingEmployeeId),
-            eq(subtaskMembers.employeeId, requestingEmployeeId),
-            eq(projectTasks.assignerId, requestingEmployeeId)
-          )) : Promise.resolve([]),
+        !isAdmin ? getAssignedProjectIds(requestingEmployeeId) : Promise.resolve([]),
       ]);
-
-      console.log('[DEBUG] /api/projects - dept/team/vendor/membership/taskMembership lengths =',
-        Array.isArray(deptResults) ? deptResults.length : typeof deptResults,
-        Array.isArray(teamResults) ? teamResults.length : typeof teamResults,
-        Array.isArray(vendorResults) ? vendorResults.length : typeof vendorResults,
-        Array.isArray(membershipResults) ? membershipResults.length : typeof membershipResults,
-        Array.isArray(taskMembershipProjectIds) ? taskMembershipProjectIds.length : typeof taskMembershipProjectIds
-      );
 
       departments = deptResults;
       teamMembers = teamResults;
@@ -3170,21 +3173,22 @@ export async function registerRoutes(
       }
       // if filterStatus is "all", we don't add status conditions
 
-      const allSteps = await db
-        .select()
-        .from(keySteps)
-        .where(cond);
-
       if (isAdmin || isE0001) {
-        return res.json(allSteps);
+        return res.json(await db.select().from(keySteps).where(cond));
       }
 
+      // PERF: these four lookups are independent — run them together (1 round trip to the DB instead of 4).
+      const [allSteps, projRows, projectTeamRows, projectDeptsEarly] = await Promise.all([
+        db.select().from(keySteps).where(cond),
+        db.select().from(projects).where(eq(projects.id, projectId)).limit(1),
+        db.select().from(projectTeamMembers).where(eq(projectTeamMembers.projectId, projectId)),
+        db.select().from(projectDepartments).where(eq(projectDepartments.projectId, projectId)),
+      ]);
+
       // RELAXED VISIBILITY: If user has access to project, they see all KeySteps
-      // Check project access (mimic /api/projects logic)
-      const [proj] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+      const [proj] = projRows;
       if (!proj) return res.status(404).json({ error: "Project not found" });
 
-      const projectTeamRows = await db.select().from(projectTeamMembers).where(eq(projectTeamMembers.projectId, projectId));
       const membership = projectTeamRows.find((m: any) => m.employeeId === requestingEmployeeId);
       const isProjectCreator = proj.createdByEmployeeId === requestingEmployeeId;
 
@@ -3192,7 +3196,7 @@ export async function registerRoutes(
       // opted into "restrict to team" (restrictToTeam column, default false
       // for every project that existed before this flag was introduced).
       const isRestrictedToTeam = Boolean((proj as any).restrictToTeam);
-      const projectDepts = await db.select().from(projectDepartments).where(eq(projectDepartments.projectId, projectId));
+      const projectDepts = projectDeptsEarly;
       const reqDeptNorm = normalizeDept(requestingEmployeeDepartment);
       const isDeptMatch = !isRestrictedToTeam && projectDepts.some(d => normalizeDept(d.department) === reqDeptNorm);
 
@@ -3214,7 +3218,6 @@ export async function registerRoutes(
 
       // If they passed access check, return all steps
       // Sort by phase ASC, title ASC as primary, but we'll return raw for frontend to sort
-      console.log(`[API /projects/${projectId}/key-steps] Returning ${allSteps.length} key steps for user ${req.user?.username}`);
       res.json(allSteps);
     } catch (err) {
       console.error("Get key steps error:", err);
@@ -3945,7 +3948,7 @@ export async function registerRoutes(
     return Boolean(task.initialSetupExpiresAt) || isOverdueTask(task);
   }
 
-  class DateExtensionRequestError extends Error {}
+  class DateExtensionRequestError extends Error { }
 
   async function createTaskDateExtensionRequest(
     task: typeof projectTasks.$inferSelect,
@@ -5156,7 +5159,7 @@ export async function registerRoutes(
       if (typeof data.assignedMembers !== 'undefined' || typeof data.taskMembers !== 'undefined') {
         const members = await db.select().from(taskMembers).where(eq(taskMembers.taskId, id));
         const memberIds = members.map(m => m.employeeId);
-        return         res.json({
+        return res.json({
           ...updated,
           assignedMembers: memberIds,
           dateChangeApprovalPending: Boolean(dateExtensionRequest),
@@ -5534,6 +5537,43 @@ export async function registerRoutes(
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error("Bulk subtasks fetch error:", errorMessage);
       res.status(500).json({ error: "Failed to fetch subtasks", details: errorMessage });
+    }
+  });
+
+  // GET ALL SUBTASKS OF A PROJECT, GROUPED BY TASK ID  ->  { [taskId]: Subtask[] }
+  // PERF: the Key Steps page used to fire one GET /api/subtasks/:taskId per task (100+ parallel requests,
+  // each running several queries). This returns the same per-task shape ({...subtask, tags}) in 2 queries.
+  app.get("/api/subtasks/by-project/:projectId", requireAuth, async (req: any, res) => {
+    try {
+      const { projectId } = req.params;
+      const joined = await db
+        .select({ s: subtasks })
+        .from(subtasks)
+        .innerJoin(projectTasks, eq(subtasks.taskId, projectTasks.id))
+        .where(eq(projectTasks.projectId, projectId));
+      const rows = joined.map((r) => r.s);
+      if (!rows.length) return res.json({});
+
+      const subIds = rows.map((r) => r.id);
+      const tagRows = await db
+        .select({ subtaskId: subtaskTags.subtaskId, id: tags.id, name: tags.name })
+        .from(subtaskTags)
+        .innerJoin(tags, eq(subtaskTags.tagId, tags.id))
+        .where(inArray(subtaskTags.subtaskId, subIds));
+      const tagMap = new Map<string, any[]>();
+      tagRows.forEach((r) => {
+        if (!tagMap.has(r.subtaskId)) tagMap.set(r.subtaskId, []);
+        tagMap.get(r.subtaskId)!.push({ id: r.id, name: r.name });
+      });
+
+      const byTask: Record<string, any[]> = {};
+      rows.forEach((r) => {
+        (byTask[r.taskId] ||= []).push({ ...r, tags: tagMap.get(r.id) || [] });
+      });
+      res.json(byTask);
+    } catch (err) {
+      console.error("Subtasks by project error:", err instanceof Error ? err.message : err);
+      res.status(500).json({ error: "Failed to fetch subtasks" });
     }
   });
 
@@ -6688,7 +6728,6 @@ export async function registerRoutes(
 
       if (isAdmin || isE0001) {
         // ADMIN FAST-PATH: Skip permission checks, just fetch filtered tasks
-        console.log(`[TASKS BULK] Admin user ${empCode} - using fast-path (skip permission checks)`);
         let query = db.select().from(projectTasks);
         if (filterStatus === "active") {
           tasks = await query.where(sql`${projectTasks.status} != 'Completed' AND ${projectTasks.status} != 'completed'`);
@@ -6722,10 +6761,7 @@ export async function registerRoutes(
           db.select({ taskId: taskMembers.taskId })
             .from(taskMembers)
             .where(eq(taskMembers.employeeId, requestingEmployeeId)),
-          db.select({ taskId: subtasks.taskId })
-            .from(subtasks)
-            .leftJoin(subtaskMembers, eq(subtasks.id, subtaskMembers.subtaskId))
-            .where(or(eq(subtasks.assignedTo, requestingEmployeeId), eq(subtaskMembers.employeeId, requestingEmployeeId))),
+          getSubtaskAssignedTaskIds(requestingEmployeeId),
         ]);
 
         const deptProjectIds = await filterDeptProjectIdsForLegacyVisibility(deptProjectIdsRaw.map((r) => r.projectId));
@@ -7053,10 +7089,7 @@ export async function registerRoutes(
             db.select({ taskId: taskMembers.taskId })
               .from(taskMembers)
               .where(eq(taskMembers.employeeId, requestingEmployeeId)),
-            db.select({ taskId: subtasks.taskId })
-              .from(subtasks)
-              .leftJoin(subtaskMembers, eq(subtasks.id, subtaskMembers.subtaskId))
-              .where(or(eq(subtasks.assignedTo, requestingEmployeeId), eq(subtaskMembers.employeeId, requestingEmployeeId))),
+            getSubtaskAssignedTaskIds(requestingEmployeeId),
           ]);
           const taskMemberIds = taskMemberIdsRaw.map((r) => r.taskId);
           const subtaskAssignedTaskIds = subtaskAssignedTaskIdsRaw.map(r => r.taskId);
@@ -8072,17 +8105,29 @@ export async function registerRoutes(
       let projectBreakdown: any[] = [];
       let totalHours = 0;
 
-      for (const projId of projectIds) {
-        const [proj] = await db.select({ title: projects.title }).from(projects).where(eq(projects.id, projId)).limit(1);
-        if (!proj) continue;
-        const { entries } = await getProjectTimeEntries(proj.title);
+      // PERF: was one title query + one (slow, remote) Timestrap call PER project, run one after another.
+      // Now: a single title query, then all Timestrap lookups in parallel.
+      const titleRows = projectIds.length
+        ? await db.select({ id: projects.id, title: projects.title }).from(projects).where(inArray(projects.id, projectIds as string[]))
+        : [];
+      const titleById = new Map<string, string>(titleRows.map((r: any) => [r.id, r.title]));
+      const perProject = await Promise.all(
+        projectIds
+          .filter((projId) => titleById.has(projId as string))
+          .map(async (projId) => {
+            const title = titleById.get(projId as string)!;
+            const { entries } = await getProjectTimeEntries(title).catch(() => ({ entries: [] as any[] }));
+            return { projId, title, entries };
+          }),
+      );
+      for (const { projId, title, entries } of perProject) {
         const empEntry = entries.find((e: any) => e.name?.toLowerCase() === emp.name?.toLowerCase());
         const hours = empEntry?.hoursSpent || 0;
         const totalProjectHours = entries.reduce((s: number, e: any) => s + (e.hoursSpent || 0), 0);
         const percent = totalProjectHours > 0 ? Math.round((hours / totalProjectHours) * 100) : 0;
         if (hours > 0) {
           totalHours += hours;
-          projectBreakdown.push({ projectId: projId, projectName: proj.title, hoursContributed: Math.round(hours * 10) / 10, contributionPercent: percent });
+          projectBreakdown.push({ projectId: projId, projectName: title, hoursContributed: Math.round(hours * 10) / 10, contributionPercent: percent });
         }
       }
 
@@ -8133,10 +8178,6 @@ export async function registerRoutes(
       // Get tasks where employee is a member
       const memberTaskIds = (await db.select({ taskId: taskMembers.taskId }).from(taskMembers).where(eq(taskMembers.employeeId, id))).map((r: any) => r.taskId);
       // Get tasks owned by employee
-      const ownedTasks = memberTaskIds.length > 0
-        ? await db.select().from(projectTasks).where(and(eq(projectTasks.taskOwnerId as any, id), inArray(projectTasks.id, memberTaskIds)))
-        : await db.select().from(projectTasks).where(eq(projectTasks.taskOwnerId as any, id));
-
       const allOwnedTasks = await db.select().from(projectTasks).where(eq(projectTasks.taskOwnerId as any, id));
       const completedOwned = allOwnedTasks.filter((t: any) => t.status === 'Completed' || t.status === 'completed');
       const delayedOwned = allOwnedTasks.filter((t: any) => {
@@ -8152,13 +8193,21 @@ export async function registerRoutes(
       const empProjects = await db.select({ projectId: projectTeamMembers.projectId }).from(projectTeamMembers).where(eq(projectTeamMembers.employeeId, id));
       let totalHours = 0;
       const projectBreakdown: any[] = [];
-      for (const { projectId } of empProjects) {
-        const [proj] = await db.select({ title: projects.title }).from(projects).where(eq(projects.id, projectId)).limit(1);
-        if (!proj) continue;
-        const { entries } = await getProjectTimeEntries(proj.title);
+      // PERF: batch the title lookup and run the Timestrap calls in parallel instead of one-by-one.
+      const empProjectIds = Array.from(new Set(empProjects.map((r: any) => r.projectId)));
+      const titleRows2 = empProjectIds.length
+        ? await db.select({ id: projects.id, title: projects.title }).from(projects).where(inArray(projects.id, empProjectIds as string[]))
+        : [];
+      const perProject2 = await Promise.all(
+        titleRows2.map(async (proj: any) => {
+          const { entries } = await getProjectTimeEntries(proj.title).catch(() => ({ entries: [] as any[] }));
+          return { title: proj.title as string, entries };
+        }),
+      );
+      for (const { title, entries } of perProject2) {
         const empEntry = entries.find((e: any) => e.name?.toLowerCase() === emp.name?.toLowerCase());
         const hours = empEntry?.hoursSpent || 0;
-        if (hours > 0) { totalHours += hours; projectBreakdown.push({ projectName: proj.title, hours: Math.round(hours * 10) / 10 }); }
+        if (hours > 0) { totalHours += hours; projectBreakdown.push({ projectName: title, hours: Math.round(hours * 10) / 10 }); }
       }
 
       res.json({
