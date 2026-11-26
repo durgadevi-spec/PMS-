@@ -319,16 +319,18 @@ export default function KeyStepsFullPage() {
         byKeyStep[ksId].push(t);
       });
       setStepTasks(byKeyStep);
-      // Pre-fetch subtasks
-      allTasks.forEach(async (t: any) => {
-        try {
-          const sr = await apiFetch(`/api/subtasks/${t.id}`);
-          if (sr.ok) {
-            const subs = await sr.json();
-            setTaskSubtasks((prev) => ({ ...prev, [t.id]: Array.isArray(subs) ? subs : [] }));
-          }
-        } catch { /* ignore */ }
-      });
+      // Pre-fetch subtasks: ONE request for the whole project (was one request per task)
+      try {
+        const sr = await apiFetch(`/api/subtasks/by-project/${projectId}`);
+        if (sr.ok) {
+          const byTask = await sr.json();
+          setTaskSubtasks((prev) => {
+            const next = { ...prev };
+            allTasks.forEach((t: any) => { next[t.id] = Array.isArray(byTask?.[t.id]) ? byTask[t.id] : []; });
+            return next;
+          });
+        }
+      } catch { /* ignore */ }
     } catch { /* ignore */ }
   };
 
@@ -428,15 +430,17 @@ export default function KeyStepsFullPage() {
         .then((allTasks: any[]) => {
           const filtered = allTasks.filter((t: any) => String(t.keyStepId) === String(id));
           setStepTasks((prev) => ({ ...prev, [id]: filtered }));
-          filtered.forEach(async (t: any) => {
-            try {
-              const sr = await apiFetch(`/api/subtasks/${t.id}`);
-              if (sr.ok) {
-                const subs = await sr.json();
-                setTaskSubtasks((p) => ({ ...p, [t.id]: Array.isArray(subs) ? subs : [] }));
-              }
-            } catch { /* ignore */ }
-          });
+          // ONE request for the project's subtasks instead of one per task
+          apiFetch(`/api/subtasks/by-project/${step.projectId}`)
+            .then((sr) => (sr.ok ? sr.json() : {}))
+            .then((byTask: any) => {
+              setTaskSubtasks((p) => {
+                const next = { ...p };
+                filtered.forEach((t: any) => { next[t.id] = Array.isArray(byTask?.[t.id]) ? byTask[t.id] : []; });
+                return next;
+              });
+            })
+            .catch(() => { /* ignore */ });
         })
         .catch(() => { });
     }
@@ -1497,406 +1501,406 @@ export default function KeyStepsFullPage() {
                   </tr>
                 </thead>
 
-              <tbody className="divide-y divide-gray-100">
-                {(() => {
-                  let lastGroup: string | null = null;
-                  return sortedProcessedKeySteps.map((step) => {
-                    const isExpanded = expandedStepIds.has(step.id);
-                    const stepTasksForStep = stepTasks[step.id] || [];
-                    const tasks = stepTasksForStep.filter((t) => priorityFilter === "all" || String(t.priority || "medium").toLowerCase() === priorityFilter.toLowerCase());
+                <tbody className="divide-y divide-gray-100">
+                  {(() => {
+                    let lastGroup: string | null = null;
+                    return sortedProcessedKeySteps.map((step) => {
+                      const isExpanded = expandedStepIds.has(step.id);
+                      const stepTasksForStep = stepTasks[step.id] || [];
+                      const tasks = stepTasksForStep.filter((t) => priorityFilter === "all" || String(t.priority || "medium").toLowerCase() === priorityFilter.toLowerCase());
 
-                    let groupHeaderRow = null;
-                    if (employeeFilter !== "all" && step._group !== lastGroup) {
-                      lastGroup = step._group;
-                      const selectedEmployeeObj = employees.find(e => String(e.id) === employeeFilter);
-                      const employeeName = selectedEmployeeObj ? selectedEmployeeObj.name : "";
-                      if (step._group === "assigned") {
-                        groupHeaderRow = (
-                          <tr className="bg-blue-50/40">
-                            <td colSpan={10} className="px-4 py-2 text-[11px] font-bold text-blue-600 uppercase tracking-wider border-y border-blue-100">
-                              <div className="flex items-center gap-2">
-                                <span>Assigned to {employeeName}</span>
-                                <Badge className="bg-blue-600 hover:bg-blue-700 text-[10px] font-bold h-4 px-1.5 flex items-center justify-center rounded">
-                                  {sortedProcessedKeySteps.filter(s => s._group === "assigned").length}
-                                </Badge>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      } else if (step._group === "dept") {
-                        groupHeaderRow = (
-                          <tr className="bg-slate-50">
-                            <td colSpan={10} className="px-4 py-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider border-y border-slate-200">
-                              <div className="flex items-center gap-2">
-                                <span>Department Related</span>
-                                <Badge variant="secondary" className="text-[10px] font-bold h-4 px-1.5 flex items-center justify-center rounded">
-                                  {sortedProcessedKeySteps.filter(s => s._group === "dept").length}
-                                </Badge>
-                              </div>
-                            </td>
-                          </tr>
-                        );
+                      let groupHeaderRow = null;
+                      if (employeeFilter !== "all" && step._group !== lastGroup) {
+                        lastGroup = step._group;
+                        const selectedEmployeeObj = employees.find(e => String(e.id) === employeeFilter);
+                        const employeeName = selectedEmployeeObj ? selectedEmployeeObj.name : "";
+                        if (step._group === "assigned") {
+                          groupHeaderRow = (
+                            <tr className="bg-blue-50/40">
+                              <td colSpan={10} className="px-4 py-2 text-[11px] font-bold text-blue-600 uppercase tracking-wider border-y border-blue-100">
+                                <div className="flex items-center gap-2">
+                                  <span>Assigned to {employeeName}</span>
+                                  <Badge className="bg-blue-600 hover:bg-blue-700 text-[10px] font-bold h-4 px-1.5 flex items-center justify-center rounded">
+                                    {sortedProcessedKeySteps.filter(s => s._group === "assigned").length}
+                                  </Badge>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        } else if (step._group === "dept") {
+                          groupHeaderRow = (
+                            <tr className="bg-slate-50">
+                              <td colSpan={10} className="px-4 py-2 text-[11px] font-bold text-slate-500 uppercase tracking-wider border-y border-slate-200">
+                                <div className="flex items-center gap-2">
+                                  <span>Department Related</span>
+                                  <Badge variant="secondary" className="text-[10px] font-bold h-4 px-1.5 flex items-center justify-center rounded">
+                                    {sortedProcessedKeySteps.filter(s => s._group === "dept").length}
+                                  </Badge>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        }
                       }
-                    }
 
-                    return (
-                      <Fragment key={step.id}>
-                        {groupHeaderRow}
-                        {/* KEY STEP ROW */}
-                        <tr
-                          className={cn(
-                            "hover:bg-[#F2F3FF]/80 dark:hover:bg-purple-950/30 transition-colors duration-150 group",
-                            selectedKeystepIds.includes(step.id) && "bg-[#F2F3FF]/50",
-                            draggedStepId === step.id ? "opacity-40" : "",
-                            dragOverStepId === step.id && draggedStepId && draggedStepId !== step.id ? "border-t-2 border-[#7047EB]" : ""
-                          )}
-                          onDragOver={(e) => handleStepDragOver(e, step.id)}
-                          onDrop={(e) => handleStepDrop(e, step.id)}
-                          onDragEnd={handleStepDragEnd}
-                        >
-                          <td className={cn("px-1 w-6", density === "compact" ? "py-1.5" : "py-2.5")}>
-                            {canReorder && (
-                              <div
-                                draggable
-                                onDragStart={(e) => handleStepDragStart(e, step.id)}
-                                onDragEnd={handleStepDragEnd}
-                                className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 transition-colors flex items-center justify-center"
-                                title="Drag to reorder"
-                              >
-                                <GripVertical className="h-4 w-4" />
-                              </div>
+                      return (
+                        <Fragment key={step.id}>
+                          {groupHeaderRow}
+                          {/* KEY STEP ROW */}
+                          <tr
+                            className={cn(
+                              "hover:bg-[#F2F3FF]/80 dark:hover:bg-purple-950/30 transition-colors duration-150 group",
+                              selectedKeystepIds.includes(step.id) && "bg-[#F2F3FF]/50",
+                              draggedStepId === step.id ? "opacity-40" : "",
+                              dragOverStepId === step.id && draggedStepId && draggedStepId !== step.id ? "border-t-2 border-[#7047EB]" : ""
                             )}
-                          </td>
-                          <td className={cn("px-2 w-8", density === "compact" ? "py-1.5" : "py-2.5")}>
-                            <button onClick={() => toggleExpand(step)} className="rounded p-0.5 hover:bg-slate-200 transition-colors text-slate-500" title={isExpanded ? "Hide details" : "Show details"}>
-                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                            </button>
-                          </td>
-                          <td className={cn("px-3 w-8", density === "compact" ? "py-1.5" : "py-2.5")}>
-                            <input type="checkbox" className="rounded border-slate-300 text-[#7047EB] focus:ring-[#7047EB]" checked={selectedKeystepIds.includes(step.id)} onChange={(e) => toggleOne(step.id, e.target.checked)} onClick={(e) => e.stopPropagation()} />
-                          </td>
-                          {isColVisible("title") && (
-                            <td
-                              className={cn("px-4 font-medium cursor-pointer", density === "compact" ? "py-1.5" : "py-2.5")}
-                              onClick={() => {
-                                localStorage.setItem("tasks_projectId", String(step.projectId));
-                                localStorage.setItem("selectedProjectId", String(step.projectId));
-                                localStorage.setItem("tasks_keyStepId", String(step.id));
-                                setLocation(`/tasks?project_id=${encodeURIComponent(String(step.projectId))}&keyStepId=${encodeURIComponent(String(step.id))}`);
-                              }}
-                            >
-                              <div className="flex items-center gap-2">
-                                {getStatusIcon(step.status)}
-                                <div className="flex flex-col">
-                                  {step.header && (
+                            onDragOver={(e) => handleStepDragOver(e, step.id)}
+                            onDrop={(e) => handleStepDrop(e, step.id)}
+                            onDragEnd={handleStepDragEnd}
+                          >
+                            <td className={cn("px-1 w-6", density === "compact" ? "py-1.5" : "py-2.5")}>
+                              {canReorder && (
+                                <div
+                                  draggable
+                                  onDragStart={(e) => handleStepDragStart(e, step.id)}
+                                  onDragEnd={handleStepDragEnd}
+                                  className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 transition-colors flex items-center justify-center"
+                                  title="Drag to reorder"
+                                >
+                                  <GripVertical className="h-4 w-4" />
+                                </div>
+                              )}
+                            </td>
+                            <td className={cn("px-2 w-8", density === "compact" ? "py-1.5" : "py-2.5")}>
+                              <button onClick={() => toggleExpand(step)} className="rounded p-0.5 hover:bg-slate-200 transition-colors text-slate-500" title={isExpanded ? "Hide details" : "Show details"}>
+                                {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                              </button>
+                            </td>
+                            <td className={cn("px-3 w-8", density === "compact" ? "py-1.5" : "py-2.5")}>
+                              <input type="checkbox" className="rounded border-slate-300 text-[#7047EB] focus:ring-[#7047EB]" checked={selectedKeystepIds.includes(step.id)} onChange={(e) => toggleOne(step.id, e.target.checked)} onClick={(e) => e.stopPropagation()} />
+                            </td>
+                            {isColVisible("title") && (
+                              <td
+                                className={cn("px-4 font-medium cursor-pointer", density === "compact" ? "py-1.5" : "py-2.5")}
+                                onClick={() => {
+                                  localStorage.setItem("tasks_projectId", String(step.projectId));
+                                  localStorage.setItem("selectedProjectId", String(step.projectId));
+                                  localStorage.setItem("tasks_keyStepId", String(step.id));
+                                  setLocation(`/tasks?project_id=${encodeURIComponent(String(step.projectId))}&keyStepId=${encodeURIComponent(String(step.id))}`);
+                                }}
+                              >
+                                <div className="flex items-center gap-2">
+                                  {getStatusIcon(step.status)}
+                                  <div className="flex flex-col">
+                                    {step.header && (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <span className="text-[10px] text-blue-500 font-bold uppercase tracking-wider mb-0.5 truncate max-w-[200px] cursor-default">
+                                            {step.header}
+                                          </span>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>{step.header}</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    )}
                                     <Tooltip>
                                       <TooltipTrigger asChild>
-                                        <span className="text-[10px] text-blue-500 font-bold uppercase tracking-wider mb-0.5 truncate max-w-[200px] cursor-default">
-                                          {step.header}
+                                        <span className="hover:text-primary hover:underline underline-offset-2 transition-colors whitespace-nowrap truncate max-w-[300px] cursor-default text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200">
+                                          {step.title}
                                         </span>
                                       </TooltipTrigger>
                                       <TooltipContent>
-                                        <p>{step.header}</p>
+                                        <p>{step.title}</p>
                                       </TooltipContent>
                                     </Tooltip>
-                                  )}
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span className="hover:text-primary hover:underline underline-offset-2 transition-colors whitespace-nowrap truncate max-w-[300px] cursor-default text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200">
-                                        {step.title}
-                                      </span>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>{step.title}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </div>
-                              </div>
-                            </td>
-                          )}
-                          {isColVisible("project") && (
-                            <td className={cn("px-4 text-xs", density === "compact" ? "py-1.5" : "py-2.5")}>
-                              <span className="px-2 py-0.5 rounded-md bg-purple-50 text-[#7047EB] font-medium text-[11px] whitespace-nowrap border border-purple-200/50">
-                                {projects.find(p => String(p.id) === String(step.projectId))?.title || "Unknown Project"}
-                              </span>
-                            </td>
-                          )}
-                          {isColVisible("startDate") && <td className={cn("px-4 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap", density === "compact" ? "py-1.5" : "py-2.5")}>{fmtDate(step.startDate)}</td>}
-                          {isColVisible("endDate") && <td className={cn("px-4 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap", density === "compact" ? "py-1.5" : "py-2.5")}>{fmtDate(step.endDate)}</td>}
-                          {isColVisible("progress") && (
-                            <td className={cn("px-4 min-w-[110px]", density === "compact" ? "py-1.5" : "py-2.5")}>
-                              <div className="flex items-center gap-2">
-                                <Progress value={step.progress || 0} className="h-1.5 flex-1" />
-                                <span className="text-[10px] text-slate-500 font-mono min-w-[28px] text-right">{step.progress || 0}%</span>
-                              </div>
-                            </td>
-                          )}
-                          {isColVisible("status") && (
-                            <td className={cn("px-4", density === "compact" ? "py-1.5" : "py-2.5")} onClick={(e) => e.stopPropagation()}>
-                              <Select value={step.status} onValueChange={(v) => updateStepStatus(step, v as KeyStep["status"])}>
-                                <SelectTrigger className={`h-7 w-28 text-[11px] font-semibold capitalize rounded-lg ${getStatusBadgeClass(step.status)}`}>
-                                  <SelectValue>
-                                    {step.status ? String(step.status).replace("-", " ") : "Select status"}
-                                  </SelectValue>
-                                </SelectTrigger>
-                                <SelectContent className="rounded-xl">
-                                  {KEYSTEP_STATUS_OPTIONS.map((s) => (
-                                    <SelectItem key={s} value={s} className="capitalize text-xs">{s.replace("-", " ")}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </td>
-                          )}
-                          <td className={cn("px-4 text-right", density === "compact" ? "py-1.5" : "py-2.5")}>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7 text-slate-500 hover:text-slate-800 hover:bg-white/90 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-52 rounded-xl shadow-lg border-slate-200 dark:border-slate-800">
-                                <DropdownMenuItem onClick={() => openEditPage(step)} className="gap-2 text-xs cursor-pointer">
-                                  <Edit className="h-3.5 w-3.5 text-blue-600" /> Edit Key Step
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFreezeKeyStepRow(step)} className="gap-2 text-xs cursor-pointer">
-                                  <Snowflake className="h-3.5 w-3.5 text-sky-600" />
-                                  {isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id)
-                                    ? "Clear Focus Freeze"
-                                    : "Freeze Focus"}
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    setCloneOpen(true);
-                                    setCloneKeystep(step);
-                                    setCloneTitle(`${step.title} (Copy)`);
-                                  }}
-                                  className="gap-2 text-xs cursor-pointer"
-                                >
-                                  <Copy className="h-3.5 w-3.5 text-slate-600" /> Clone / Duplicate
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    setSaveTemplateStep(step);
-                                    setSaveTemplateName(step.title);
-                                  }}
-                                  className="gap-2 text-xs cursor-pointer"
-                                >
-                                  <Bookmark className="h-3.5 w-3.5 text-violet-600" /> Save as Template
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  onClick={() => handleDeleteStep(step.id, step.title)}
-                                  className="gap-2 text-xs text-rose-600 focus:text-rose-600 focus:bg-rose-50 cursor-pointer"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" /> Delete Key Step
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </td>
-                        </tr>
-
-                        {/* EXPANDED PANEL */}
-                        {isExpanded && (
-                          <tr className="bg-blue-50/30 border-t border-blue-100">
-                            <td colSpan={10} className="px-0 py-0">
-                              {/* Metadata strip */}
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 px-8 py-3 border-b border-blue-100 bg-indigo-50/50">
-                                <div><p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Status</p><span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium capitalize ${getStatusBadgeClass(step.status)}`}>{step.status.replace("-", " ")}</span></div>
-                                <div><p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Duration</p><p className="text-sm">{fmtDate(step.startDate)} → {fmtDate(step.endDate)}</p></div>
-                              </div>
-
-                              {/* Tasks section */}
-                              <div className="px-8 py-4">
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
-                                  <div className="flex items-center gap-2 text-sm font-bold text-blue-700">
-                                    <ListTodo size={15} /> Tasks ({tasks.length})
-                                  </div>
-                                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-                                    <Input
-                                      value={taskSearch}
-                                      onChange={(e) => setTaskSearch(e.target.value)}
-                                      placeholder="Search tasks..."
-                                      className="h-9 w-full sm:w-80"
-                                    />
-                                    <button
-                                      onClick={() => { setShowTaskFormFor(showTaskFormFor === step.id ? null : step.id); setNewTaskForm({ taskName: "", startDate: "", endDate: "", status: "Not Started", priority: "medium" }); }}
-                                      className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 border border-blue-300 rounded px-2 py-1 bg-white"
-                                    >
-                                      <Plus size={11} /> Add Task
-                                    </button>
                                   </div>
                                 </div>
-
-                                {/* Add Task form */}
-                                {showTaskFormFor === step.id && (
-                                  <div className="flex flex-wrap gap-2 items-center bg-white border border-blue-200 rounded-lg px-3 py-2 mb-3">
-                                    <input placeholder="Task name *" className="border rounded px-2 py-1 text-xs flex-1 min-w-[160px]" value={newTaskForm.taskName} onChange={(e) => setNewTaskForm((p) => ({ ...p, taskName: e.target.value }))} />
-                                    <input type="date" className="border rounded px-2 py-1 text-xs" value={newTaskForm.startDate} onChange={(e) => { const newStartDate = e.target.value; setNewTaskForm((p) => ({ ...p, startDate: newStartDate, endDate: p.endDate && newStartDate && p.endDate < newStartDate ? newStartDate : p.endDate })); }} />
-                                    <input type="date" className="border rounded px-2 py-1 text-xs" min={newTaskForm.startDate || undefined} value={newTaskForm.endDate} onChange={(e) => { const newEndDate = e.target.value; setNewTaskForm((p) => ({ ...p, endDate: p.startDate && newEndDate && newEndDate < p.startDate ? p.startDate : newEndDate })); }} />
-                                    <select className="border rounded px-2 py-1 text-xs" value={newTaskForm.priority} onChange={(e) => setNewTaskForm((p) => ({ ...p, priority: e.target.value }))}>
-                                      <option value="low">Low</option>
-                                      <option value="medium">Medium</option>
-                                      <option value="high">High</option>
-                                    </select>
-                                    <button onClick={() => addTaskToKeyStep(step.id, step.projectId)} className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-semibold">Save</button>
-                                    <button onClick={() => setShowTaskFormFor(null)} className="text-xs text-slate-500 underline">Cancel</button>
-                                  </div>
-                                )}
-
-                                {tasks.length === 0 && showTaskFormFor !== step.id && (
-                                  <p className="text-sm text-slate-400 italic py-2">No tasks linked to this key step. Click "+ Add Task" to add one.</p>
-                                )}
-
-                                {/* Task cards */}
-                                <div className="space-y-2">
-                                  {tasks
-                                    .filter((task: any) => !taskSearch || String(task.taskName || "").toLowerCase().includes(taskSearch.toLowerCase()))
-                                    .map((task: any) => {
-                                      const taskKey = `${step.id}-${task.id}`;
-                                      const isTaskExpanded = expandedTaskIds.has(taskKey);
-                                      const subs = taskSubtasks[task.id] || [];
-                                      const memberNames = (task.taskMembers || task.assignedMembers || [])
-                                        .map((id: string) => employees.find((e: any) => String(e.id) === String(id))?.name || id)
-                                        .filter(Boolean);
-
-                                      return (
-                                        <div key={task.id} className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm">
-                                          <div className="flex items-center gap-3 px-3 py-2.5">
-                                            <button
-                                              onClick={() => {
-                                                const expanding = !isTaskExpanded;
-                                                setExpandedTaskIds((prev) => { const next = new Set(prev); if (expanding) next.add(taskKey); else next.delete(taskKey); return next; });
-                                                if (expanding && taskSubtasks[task.id] === undefined) {
-                                                  apiFetch(`/api/subtasks/${task.id}`).then((r) => r.json()).then((s) => setTaskSubtasks((p) => ({ ...p, [task.id]: Array.isArray(s) ? s : [] }))).catch(() => { });
-                                                }
-                                              }}
-                                              className="text-slate-400 hover:text-slate-600 flex-shrink-0"
-                                            >
-                                              {isTaskExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                                            </button>
-                                            <div className="flex-1 min-w-0">
-                                              <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                  <button
-                                                    type="button"
-                                                    className="text-left text-sm font-semibold text-slate-800 truncate cursor-pointer"
-                                                    onClick={() => openTaskPage(task.id, step.projectId, step.id)}
-                                                  >
-                                                    {task.taskName}
-                                                  </button>
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                  <p>{task.taskName}</p>
-                                                </TooltipContent>
-                                              </Tooltip>
-                                              {memberNames.length > 0 && <p className="text-xs text-slate-400">{memberNames.join(", ")}</p>}
-                                            </div>
-                                            <span className={`text-xs px-2 py-0.5 rounded-full font-semibold border flex-shrink-0 ${getTaskStatusColor(task.status)}`}>{task.status || "—"}</span>
-                                            <div className="w-24 flex-shrink-0 hidden md:block">
-                                              <div className="flex justify-between items-center text-[9px] text-muted-foreground mb-0.5">
-                                                <span>Progress</span>
-                                                <span>{task.progress || 0}%</span>
-                                              </div>
-                                              <Progress value={task.progress || 0} className="h-1 shadow-sm" />
-                                            </div>
-                                            <span className={`text-xs px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${task.priority === "high" ? "bg-red-100 text-red-700" : task.priority === "medium" ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}`}>{task.priority || "medium"}</span>
-                                            <span className="text-xs text-slate-400 flex-shrink-0">{fmtDate(task.startDate)} → {fmtDate(task.endDate)}</span>
-                                            <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium flex-shrink-0">{subs.length} sub</span>
-                                            <button
-                                              onClick={() => { setShowSubtaskFormFor(showSubtaskFormFor === task.id ? null : task.id); setNewSubtaskForm({ title: "", startDate: "", endDate: "" }); if (!isTaskExpanded) { setExpandedTaskIds((prev) => { const next = new Set(prev); next.add(taskKey); return next; }); } }}
-                                              className="text-xs text-emerald-600 border border-emerald-200 rounded px-1.5 py-0.5 hover:bg-emerald-50 flex-shrink-0"
-                                            >+ Sub</button>
-                                          </div>
-
-                                          {/* Subtasks panel */}
-                                          {isTaskExpanded && (
-                                            <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-2 space-y-1">
-                                              {showSubtaskFormFor === task.id && (
-                                                <div className="flex flex-wrap gap-2 items-center bg-white border border-emerald-200 rounded-lg px-3 py-2 mb-2">
-                                                  <input placeholder="Subtask title *" className="border rounded px-2 py-1 text-xs flex-1 min-w-[160px]" value={newSubtaskForm.title} onChange={(e) => setNewSubtaskForm((p) => ({ ...p, title: e.target.value }))} />
-                                                  <input type="date" className="border rounded px-2 py-1 text-xs" value={newSubtaskForm.startDate} onChange={(e) => { const newStartDate = e.target.value; setNewSubtaskForm((p) => ({ ...p, startDate: newStartDate, endDate: p.endDate && newStartDate && p.endDate < newStartDate ? newStartDate : p.endDate })); }} />
-                                                  <input type="date" className="border rounded px-2 py-1 text-xs" min={newSubtaskForm.startDate || undefined} value={newSubtaskForm.endDate} onChange={(e) => { const newEndDate = e.target.value; setNewSubtaskForm((p) => ({ ...p, endDate: p.startDate && newEndDate && newEndDate < p.startDate ? p.startDate : newEndDate })); }} />
-                                                  <button onClick={() => addSubtaskToTask(task.id)} className="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-semibold">Save</button>
-                                                  <button onClick={() => setShowSubtaskFormFor(null)} className="text-xs text-slate-500 underline">Cancel</button>
-                                                </div>
-                                              )}
-                                              {subs.length === 0 && showSubtaskFormFor !== task.id && (
-                                                <p className="text-xs text-slate-400 italic py-1 pl-2">No subtasks yet.</p>
-                                              )}
-                                              {subs.map((sub: any) => (
-                                                <div key={sub.id} className="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-100">
-                                                  <button onClick={() => toggleSubtask(task.id, sub.id, !!sub.isCompleted)} className={sub.isCompleted ? "text-green-500" : "text-slate-300 hover:text-slate-500"}>
-                                                    {sub.isCompleted ? <CheckCircle2 size={14} /> : <Circle size={14} />}
-                                                  </button>
-                                                  <span className={`text-sm flex-1 ${sub.isCompleted ? "line-through text-slate-400" : "text-slate-700"}`}>{sub.title}</span>
-
-                                                  <div className="flex items-center gap-2 w-32 shrink-0">
-                                                    <input
-                                                      type="range"
-                                                      min="0"
-                                                      max="100"
-                                                      step="1"
-                                                      value={sub.progress || 0}
-                                                      disabled={sub.isCompleted}
-                                                      onChange={(e) => updateSubtaskProgress(task.id, sub.id, parseInt(e.target.value))}
-                                                      className={`w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-500 ${sub.isCompleted ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                                    />
-                                                    <span className="text-[10px] font-mono text-slate-500 min-w-[24px] text-right">{sub.progress || 0}%</span>
-                                                  </div>
-
-                                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${sub.isCompleted ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>{sub.isCompleted ? "Done" : "Pending"}</span>
-                                                  {(sub.startDate || sub.endDate) && <span className="text-xs text-slate-400">{fmtDate(sub.startDate)} → {fmtDate(sub.endDate)}</span>}
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
+                              </td>
+                            )}
+                            {isColVisible("project") && (
+                              <td className={cn("px-4 text-xs", density === "compact" ? "py-1.5" : "py-2.5")}>
+                                <span className="px-2 py-0.5 rounded-md bg-purple-50 text-[#7047EB] font-medium text-[11px] whitespace-nowrap border border-purple-200/50">
+                                  {projects.find(p => String(p.id) === String(step.projectId))?.title || "Unknown Project"}
+                                </span>
+                              </td>
+                            )}
+                            {isColVisible("startDate") && <td className={cn("px-4 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap", density === "compact" ? "py-1.5" : "py-2.5")}>{fmtDate(step.startDate)}</td>}
+                            {isColVisible("endDate") && <td className={cn("px-4 text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap", density === "compact" ? "py-1.5" : "py-2.5")}>{fmtDate(step.endDate)}</td>}
+                            {isColVisible("progress") && (
+                              <td className={cn("px-4 min-w-[110px]", density === "compact" ? "py-1.5" : "py-2.5")}>
+                                <div className="flex items-center gap-2">
+                                  <Progress value={step.progress || 0} className="h-1.5 flex-1" />
+                                  <span className="text-[10px] text-slate-500 font-mono min-w-[28px] text-right">{step.progress || 0}%</span>
                                 </div>
-                              </div>
+                              </td>
+                            )}
+                            {isColVisible("status") && (
+                              <td className={cn("px-4", density === "compact" ? "py-1.5" : "py-2.5")} onClick={(e) => e.stopPropagation()}>
+                                <Select value={step.status} onValueChange={(v) => updateStepStatus(step, v as KeyStep["status"])}>
+                                  <SelectTrigger className={`h-7 w-28 text-[11px] font-semibold capitalize rounded-lg ${getStatusBadgeClass(step.status)}`}>
+                                    <SelectValue>
+                                      {step.status ? String(step.status).replace("-", " ") : "Select status"}
+                                    </SelectValue>
+                                  </SelectTrigger>
+                                  <SelectContent className="rounded-xl">
+                                    {KEYSTEP_STATUS_OPTIONS.map((s) => (
+                                      <SelectItem key={s} value={s} className="capitalize text-xs">{s.replace("-", " ")}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </td>
+                            )}
+                            <td className={cn("px-4 text-right", density === "compact" ? "py-1.5" : "py-2.5")}>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-slate-500 hover:text-slate-800 hover:bg-white/90 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-52 rounded-xl shadow-lg border-slate-200 dark:border-slate-800">
+                                  <DropdownMenuItem onClick={() => openEditPage(step)} className="gap-2 text-xs cursor-pointer">
+                                    <Edit className="h-3.5 w-3.5 text-blue-600" /> Edit Key Step
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => handleFreezeKeyStepRow(step)} className="gap-2 text-xs cursor-pointer">
+                                    <Snowflake className="h-3.5 w-3.5 text-sky-600" />
+                                    {isItemFrozen && frozenItem?.type === "keystep" && String(frozenItem.id) === String(step.id)
+                                      ? "Clear Focus Freeze"
+                                      : "Freeze Focus"}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      setCloneOpen(true);
+                                      setCloneKeystep(step);
+                                      setCloneTitle(`${step.title} (Copy)`);
+                                    }}
+                                    className="gap-2 text-xs cursor-pointer"
+                                  >
+                                    <Copy className="h-3.5 w-3.5 text-slate-600" /> Clone / Duplicate
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      setSaveTemplateStep(step);
+                                      setSaveTemplateName(step.title);
+                                    }}
+                                    className="gap-2 text-xs cursor-pointer"
+                                  >
+                                    <Bookmark className="h-3.5 w-3.5 text-violet-600" /> Save as Template
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleDeleteStep(step.id, step.title)}
+                                    className="gap-2 text-xs text-rose-600 focus:text-rose-600 focus:bg-rose-50 cursor-pointer"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" /> Delete Key Step
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </td>
                           </tr>
-                        )}
-                      </Fragment>
-                    );
-                  });
-                })()}
-              </tbody>
-            </table>
-          ) : (
-            <div className="text-center py-16 text-muted-foreground">
-              {hasActiveFilters ? (
-                <div>
-                  <p className="text-base font-medium mb-1">No key steps match your filters</p>
-                  <p className="text-sm mb-3">Try adjusting or clearing the filters</p>
-                  <Button variant="outline" size="sm" onClick={clearFilters}><X className="h-3.5 w-3.5 mr-1" /> Clear Filters</Button>
-                </div>
-              ) : (
-                <div>
-                  {!selectedProjectId ? (
-                    <>
-                      <p className="text-base font-medium mb-1">No project selected</p>
-                      <p className="text-sm">Please select a project to view its KeySteps.</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-base font-medium mb-1">No KeySteps for this project</p>
-                      <p className="text-sm">Click "New Key Step" to get started.</p>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+
+                          {/* EXPANDED PANEL */}
+                          {isExpanded && (
+                            <tr className="bg-blue-50/30 border-t border-blue-100">
+                              <td colSpan={10} className="px-0 py-0">
+                                {/* Metadata strip */}
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 px-8 py-3 border-b border-blue-100 bg-indigo-50/50">
+                                  <div><p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Status</p><span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium capitalize ${getStatusBadgeClass(step.status)}`}>{step.status.replace("-", " ")}</span></div>
+                                  <div><p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Duration</p><p className="text-sm">{fmtDate(step.startDate)} → {fmtDate(step.endDate)}</p></div>
+                                </div>
+
+                                {/* Tasks section */}
+                                <div className="px-8 py-4">
+                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
+                                    <div className="flex items-center gap-2 text-sm font-bold text-blue-700">
+                                      <ListTodo size={15} /> Tasks ({tasks.length})
+                                    </div>
+                                    <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+                                      <Input
+                                        value={taskSearch}
+                                        onChange={(e) => setTaskSearch(e.target.value)}
+                                        placeholder="Search tasks..."
+                                        className="h-9 w-full sm:w-80"
+                                      />
+                                      <button
+                                        onClick={() => { setShowTaskFormFor(showTaskFormFor === step.id ? null : step.id); setNewTaskForm({ taskName: "", startDate: "", endDate: "", status: "Not Started", priority: "medium" }); }}
+                                        className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 border border-blue-300 rounded px-2 py-1 bg-white"
+                                      >
+                                        <Plus size={11} /> Add Task
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Add Task form */}
+                                  {showTaskFormFor === step.id && (
+                                    <div className="flex flex-wrap gap-2 items-center bg-white border border-blue-200 rounded-lg px-3 py-2 mb-3">
+                                      <input placeholder="Task name *" className="border rounded px-2 py-1 text-xs flex-1 min-w-[160px]" value={newTaskForm.taskName} onChange={(e) => setNewTaskForm((p) => ({ ...p, taskName: e.target.value }))} />
+                                      <input type="date" className="border rounded px-2 py-1 text-xs" value={newTaskForm.startDate} onChange={(e) => { const newStartDate = e.target.value; setNewTaskForm((p) => ({ ...p, startDate: newStartDate, endDate: p.endDate && newStartDate && p.endDate < newStartDate ? newStartDate : p.endDate })); }} />
+                                      <input type="date" className="border rounded px-2 py-1 text-xs" min={newTaskForm.startDate || undefined} value={newTaskForm.endDate} onChange={(e) => { const newEndDate = e.target.value; setNewTaskForm((p) => ({ ...p, endDate: p.startDate && newEndDate && newEndDate < p.startDate ? p.startDate : newEndDate })); }} />
+                                      <select className="border rounded px-2 py-1 text-xs" value={newTaskForm.priority} onChange={(e) => setNewTaskForm((p) => ({ ...p, priority: e.target.value }))}>
+                                        <option value="low">Low</option>
+                                        <option value="medium">Medium</option>
+                                        <option value="high">High</option>
+                                      </select>
+                                      <button onClick={() => addTaskToKeyStep(step.id, step.projectId)} className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-semibold">Save</button>
+                                      <button onClick={() => setShowTaskFormFor(null)} className="text-xs text-slate-500 underline">Cancel</button>
+                                    </div>
+                                  )}
+
+                                  {tasks.length === 0 && showTaskFormFor !== step.id && (
+                                    <p className="text-sm text-slate-400 italic py-2">No tasks linked to this key step. Click "+ Add Task" to add one.</p>
+                                  )}
+
+                                  {/* Task cards */}
+                                  <div className="space-y-2">
+                                    {tasks
+                                      .filter((task: any) => !taskSearch || String(task.taskName || "").toLowerCase().includes(taskSearch.toLowerCase()))
+                                      .map((task: any) => {
+                                        const taskKey = `${step.id}-${task.id}`;
+                                        const isTaskExpanded = expandedTaskIds.has(taskKey);
+                                        const subs = taskSubtasks[task.id] || [];
+                                        const memberNames = (task.taskMembers || task.assignedMembers || [])
+                                          .map((id: string) => employees.find((e: any) => String(e.id) === String(id))?.name || id)
+                                          .filter(Boolean);
+
+                                        return (
+                                          <div key={task.id} className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm">
+                                            <div className="flex items-center gap-3 px-3 py-2.5">
+                                              <button
+                                                onClick={() => {
+                                                  const expanding = !isTaskExpanded;
+                                                  setExpandedTaskIds((prev) => { const next = new Set(prev); if (expanding) next.add(taskKey); else next.delete(taskKey); return next; });
+                                                  if (expanding && taskSubtasks[task.id] === undefined) {
+                                                    apiFetch(`/api/subtasks/${task.id}`).then((r) => r.json()).then((s) => setTaskSubtasks((p) => ({ ...p, [task.id]: Array.isArray(s) ? s : [] }))).catch(() => { });
+                                                  }
+                                                }}
+                                                className="text-slate-400 hover:text-slate-600 flex-shrink-0"
+                                              >
+                                                {isTaskExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                                              </button>
+                                              <div className="flex-1 min-w-0">
+                                                <Tooltip>
+                                                  <TooltipTrigger asChild>
+                                                    <button
+                                                      type="button"
+                                                      className="text-left text-sm font-semibold text-slate-800 truncate cursor-pointer"
+                                                      onClick={() => openTaskPage(task.id, step.projectId, step.id)}
+                                                    >
+                                                      {task.taskName}
+                                                    </button>
+                                                  </TooltipTrigger>
+                                                  <TooltipContent>
+                                                    <p>{task.taskName}</p>
+                                                  </TooltipContent>
+                                                </Tooltip>
+                                                {memberNames.length > 0 && <p className="text-xs text-slate-400">{memberNames.join(", ")}</p>}
+                                              </div>
+                                              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold border flex-shrink-0 ${getTaskStatusColor(task.status)}`}>{task.status || "—"}</span>
+                                              <div className="w-24 flex-shrink-0 hidden md:block">
+                                                <div className="flex justify-between items-center text-[9px] text-muted-foreground mb-0.5">
+                                                  <span>Progress</span>
+                                                  <span>{task.progress || 0}%</span>
+                                                </div>
+                                                <Progress value={task.progress || 0} className="h-1 shadow-sm" />
+                                              </div>
+                                              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${task.priority === "high" ? "bg-red-100 text-red-700" : task.priority === "medium" ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}`}>{task.priority || "medium"}</span>
+                                              <span className="text-xs text-slate-400 flex-shrink-0">{fmtDate(task.startDate)} → {fmtDate(task.endDate)}</span>
+                                              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium flex-shrink-0">{subs.length} sub</span>
+                                              <button
+                                                onClick={() => { setShowSubtaskFormFor(showSubtaskFormFor === task.id ? null : task.id); setNewSubtaskForm({ title: "", startDate: "", endDate: "" }); if (!isTaskExpanded) { setExpandedTaskIds((prev) => { const next = new Set(prev); next.add(taskKey); return next; }); } }}
+                                                className="text-xs text-emerald-600 border border-emerald-200 rounded px-1.5 py-0.5 hover:bg-emerald-50 flex-shrink-0"
+                                              >+ Sub</button>
+                                            </div>
+
+                                            {/* Subtasks panel */}
+                                            {isTaskExpanded && (
+                                              <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-2 space-y-1">
+                                                {showSubtaskFormFor === task.id && (
+                                                  <div className="flex flex-wrap gap-2 items-center bg-white border border-emerald-200 rounded-lg px-3 py-2 mb-2">
+                                                    <input placeholder="Subtask title *" className="border rounded px-2 py-1 text-xs flex-1 min-w-[160px]" value={newSubtaskForm.title} onChange={(e) => setNewSubtaskForm((p) => ({ ...p, title: e.target.value }))} />
+                                                    <input type="date" className="border rounded px-2 py-1 text-xs" value={newSubtaskForm.startDate} onChange={(e) => { const newStartDate = e.target.value; setNewSubtaskForm((p) => ({ ...p, startDate: newStartDate, endDate: p.endDate && newStartDate && p.endDate < newStartDate ? newStartDate : p.endDate })); }} />
+                                                    <input type="date" className="border rounded px-2 py-1 text-xs" min={newSubtaskForm.startDate || undefined} value={newSubtaskForm.endDate} onChange={(e) => { const newEndDate = e.target.value; setNewSubtaskForm((p) => ({ ...p, endDate: p.startDate && newEndDate && newEndDate < p.startDate ? p.startDate : newEndDate })); }} />
+                                                    <button onClick={() => addSubtaskToTask(task.id)} className="bg-emerald-600 text-white px-3 py-1 rounded text-xs font-semibold">Save</button>
+                                                    <button onClick={() => setShowSubtaskFormFor(null)} className="text-xs text-slate-500 underline">Cancel</button>
+                                                  </div>
+                                                )}
+                                                {subs.length === 0 && showSubtaskFormFor !== task.id && (
+                                                  <p className="text-xs text-slate-400 italic py-1 pl-2">No subtasks yet.</p>
+                                                )}
+                                                {subs.map((sub: any) => (
+                                                  <div key={sub.id} className="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-100">
+                                                    <button onClick={() => toggleSubtask(task.id, sub.id, !!sub.isCompleted)} className={sub.isCompleted ? "text-green-500" : "text-slate-300 hover:text-slate-500"}>
+                                                      {sub.isCompleted ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+                                                    </button>
+                                                    <span className={`text-sm flex-1 ${sub.isCompleted ? "line-through text-slate-400" : "text-slate-700"}`}>{sub.title}</span>
+
+                                                    <div className="flex items-center gap-2 w-32 shrink-0">
+                                                      <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="100"
+                                                        step="1"
+                                                        value={sub.progress || 0}
+                                                        disabled={sub.isCompleted}
+                                                        onChange={(e) => updateSubtaskProgress(task.id, sub.id, parseInt(e.target.value))}
+                                                        className={`w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-500 ${sub.isCompleted ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                      />
+                                                      <span className="text-[10px] font-mono text-slate-500 min-w-[24px] text-right">{sub.progress || 0}%</span>
+                                                    </div>
+
+                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${sub.isCompleted ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>{sub.isCompleted ? "Done" : "Pending"}</span>
+                                                    {(sub.startDate || sub.endDate) && <span className="text-xs text-slate-400">{fmtDate(sub.startDate)} → {fmtDate(sub.endDate)}</span>}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+            ) : (
+              <div className="text-center py-16 text-muted-foreground">
+                {hasActiveFilters ? (
+                  <div>
+                    <p className="text-base font-medium mb-1">No key steps match your filters</p>
+                    <p className="text-sm mb-3">Try adjusting or clearing the filters</p>
+                    <Button variant="outline" size="sm" onClick={clearFilters}><X className="h-3.5 w-3.5 mr-1" /> Clear Filters</Button>
+                  </div>
+                ) : (
+                  <div>
+                    {!selectedProjectId ? (
+                      <>
+                        <p className="text-base font-medium mb-1">No project selected</p>
+                        <p className="text-sm">Please select a project to view its KeySteps.</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-base font-medium mb-1">No KeySteps for this project</p>
+                        <p className="text-sm">Click "New Key Step" to get started.</p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
 
       {/* ── SAVE AS TEMPLATE MODAL ─────────────────────────────────────── */}
       {saveTemplateStep && (

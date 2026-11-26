@@ -22,7 +22,7 @@ import {
   ChevronsUpDown,
   Percent,
   MessageSquare,
-    MessageCircle,
+  MessageCircle,
   GripVertical,
   EyeOff,
   RotateCcw,
@@ -1835,38 +1835,34 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       })
       .catch(() => setProjects([]));
 
-    // Load tags
-    apiFetch("/api/tags")
-      .then((r) => r.ok ? r.json() : [])
-      .then((data) => setAllTags(Array.isArray(data) ? data : []))
-      .catch(() => setAllTags([]));
-
-    // Load discussions to show comment counts
-    apiFetch("/api/discussions")
-      .then((r) => r.ok ? r.json() : [])
-      .then((data) => setDiscussions(Array.isArray(data) ? data : []))
-      .catch(() => setDiscussions([]));
-
-    // Initially load all employees if no project is selected (global view)
-    if (!projectId) {
-      apiFetch("/api/employees")
+    // PERF: tags + discussions are only decorations (tag chips, comment counts). Fetch them a moment
+    // AFTER the first paint so they don't compete with the tasks/projects requests for connections.
+    const deferTimer = window.setTimeout(() => {
+      apiFetch("/api/tags")
         .then((r) => r.ok ? r.json() : [])
-        .then((data) => {
-          const arr = Array.isArray(data) ? data : [];
-          setEmployees(arr);
-          setAllEmployees(arr);
-        })
-        .catch(() => {
-          setEmployees([]);
-          setAllEmployees([]);
-        });
-    } else {
-      // Still need all employees for lookup even if a project is selected
-      apiFetch("/api/employees")
+        .then((data) => setAllTags(Array.isArray(data) ? data : []))
+        .catch(() => setAllTags([]));
+
+      apiFetch("/api/discussions")
         .then((r) => r.ok ? r.json() : [])
-        .then((data) => setAllEmployees(Array.isArray(data) ? data : []))
-        .catch(() => setAllEmployees([]));
-    }
+        .then((data) => setDiscussions(Array.isArray(data) ? data : []))
+        .catch(() => setDiscussions([]));
+    }, 1500);
+
+    // One employees request (previously fired twice with identical URLs)
+    apiFetch("/api/employees")
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        const arr = Array.isArray(data) ? data : [];
+        if (!projectId) setEmployees(arr);
+        setAllEmployees(arr);
+      })
+      .catch(() => {
+        if (!projectId) setEmployees([]);
+        setAllEmployees([]);
+      });
+
+    return () => window.clearTimeout(deferTimer);
   }, []);
 
   /* ================= LOAD PROJECT-SPECIFIC DATA (PARALLEL) ================= */
@@ -1900,7 +1896,6 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
           ).then((r) => r.ok ? r.json() : []),
         ]);
 
-        console.log("[TASKS DEBUG] Parallel load completed - tasks:", tasksData.length, "keysteps:", keystepsData.length);
         setTasks(normalizeTasks(tasksData));
         setKeySteps(Array.isArray(keystepsData) ? keystepsData : []);
       } catch (err) {
@@ -1930,10 +1925,8 @@ export default function Tasks({ myTasksOnly = false }: TasksProps = {}) {
       .then((r) => r.ok ? r.json() : [])
       .then((data) => {
         const memberList = Array.isArray(data) ? data : [];
-        console.log(`[TASKS-MEMBERS] Loaded ${memberList.length} members for project ${projectId}`);
         // If no project members found, fallback to all employees
         if (memberList.length === 0 && allEmployees.length > 0) {
-          console.log(`[TASKS-MEMBERS] No project members found, falling back to all employees (${allEmployees.length})`);
           setEmployees(allEmployees);
         } else {
           setEmployees(memberList);

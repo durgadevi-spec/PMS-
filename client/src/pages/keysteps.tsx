@@ -156,11 +156,23 @@ export default function KeySteps() {
         const filtered = allTasks.filter((t: any) => String(t.keyStepId) === String(keyStepId));
         setStepTasks((prev) => ({ ...prev, [keyStepId]: filtered }));
 
-        // Fetch all subtasks in parallel instead of sequentially
+        // ONE request for the project's subtasks (was one request per task)
         if (filtered.length > 0) {
-          await Promise.all(
-            filtered.map((task: any) => fetchSubtasksForTask(task.id))
-          );
+          try {
+            const sr = await apiFetch(`/api/subtasks/by-project/${projectId}`);
+            if (sr.ok) {
+              const byTask = await sr.json();
+              setTaskSubtasks((prev) => {
+                const next = { ...prev };
+                filtered.forEach((task: any) => { next[task.id] = Array.isArray(byTask?.[task.id]) ? byTask[task.id] : []; });
+                return next;
+              });
+            } else {
+              await Promise.all(filtered.map((task: any) => fetchSubtasksForTask(task.id)));
+            }
+          } catch {
+            await Promise.all(filtered.map((task: any) => fetchSubtasksForTask(task.id)));
+          }
         }
       }
     } catch (err) {
